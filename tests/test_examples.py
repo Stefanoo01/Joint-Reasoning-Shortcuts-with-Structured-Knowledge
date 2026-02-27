@@ -1,0 +1,171 @@
+from __future__ import annotations
+
+import torch
+
+from logic.atoms import Atom, BOT, Predicate
+from logic.language import LanguageSpec, build_ground_atoms, build_index
+from logic.templates import RuleTemplate, ProgramTemplate
+
+from learning.bias import BiasConfig
+from learning.build_program import build_clause_sets_for_program, build_caches_with_bias
+from learning.model import ProgramLearner
+from learning.examples import build_example_from_positives
+from learning.trainer import TrainConfig, train_program_examples
+
+def _setup():
+    C = ["0", "1", "2", "3", "4", "5"]
+    predicates = [
+        Predicate("zero", 1, "E"),
+        Predicate("succ", 2, "E"),
+        Predicate("even", 1, "I"),
+    ]
+    spec = LanguageSpec(constants=C, predicates=predicates)
+    G = build_ground_atoms(spec)
+    atom_to_idx, idx_to_atom, bot_idx = build_index(G)
+
+    B = [
+        Atom("zero", ("0",)),
+        Atom("succ", ("0", "1")),
+        Atom("succ", ("1", "2")),
+        Atom("succ", ("2", "3")),
+        Atom("succ", ("3", "4")),
+        Atom("succ", ("4", "5")),
+    ]
+    return C, atom_to_idx, B
+
+
+def test_build_example_even():
+    C, atom_to_idx, B = _setup()
+
+    ex = build_example_from_positives(
+        atom_to_idx=atom_to_idx,
+        constants=C,
+        pred_name="even",
+        arity=1,
+        positive_atoms=[Atom("even", ("0",)), Atom("even", ("2",)), Atom("even", ("4",))],
+        hard_facts=B,
+        soft_facts=[],
+    )
+
+    assert len(ex.hard_facts) == len(B)
+    assert len(ex.targets.pos_idx) == 3
+    assert len(ex.targets.neg_idx) == 3
+
+def test_train_program_examples_smoke():
+    # --- Setup toy language with succ2 as latent aux ---
+    C = ["0", "1", "2", "3", "4", "5"]
+    predicates = [
+        Predicate("zero", 1, "E"),
+        Predicate("succ", 2, "E"),
+        Predicate("even", 1, "I"),
+        Predicate("succ2", 2, "I"),
+    ]
+
+    target_pred = next(p for p in predicates if p.name == "even" and p.arity == 1)
+    succ2_pred = next(p for p in predicates if p.name == "succ2" and p.arity == 2)
+
+    spec = LanguageSpec(constants=C, predicates=predicates)
+    G = build_ground_atoms(spec)
+    atom_to_idx, idx_to_atom, bot_idx = build_index(G)
+    n = len(G)
+
+    B = [
+        Atom("zero", ("0",)),
+        Atom("succ", ("0", "1")),
+        Atom("succ", ("1", "2")),
+        Atom("succ", ("2", "3")),
+        Atom("succ", ("3", "4")),
+        Atom("succ", ("4", "5")),
+    ]
+
+    # Π templates
+    tau1_even = RuleTemplate(v=0, int_flag=0)
+    tau2_even = RuleTemplate(v=1, int_flag=1)
+    tau_succ2 = RuleTemplate(v=1, int_flag=0)
+
+    Pi = ProgramTemplate(
+        aux_predicates=[succ2_pred],
+        rules={
+            ("even", 1): (tau1_even, tau2_even),
+            ("succ2", 2): (tau_succ2, tau_succ2),
+        },
+        T=4,
+    )
+
+    # Clause sets + bias
+    clause_sets = build_clause_sets_for_program(
+        predicates=predicates,
+        target_pred=target_pred,
+        program=Pi,
+    )
+
+    bias = BiasConfig(
+        allowed_body_preds={
+            ("succ2", 2): {"succ"},
+            ("even", 1): {"zero", "succ2", "even"},
+        },
+        require_recursive={},
+        require_body_connected=True,
+    )
+
+    caches, clause_texts = build_caches_with_bias(
+        clause_sets=clause_sets,
+        constants=C,
+        atom_to_idx=atom_to_idx,
+        n=n,
+        bot_idx=bot_idx,
+        bias=bias,
+        require_recursive_on_C2={("even", 1): True},
+    )
+
+    learner = ProgramLearner(caches)
+
+    # Examples: 2 identical examples is fine for smoke
+    positives = [Atom("even", ("0",)), Atom("even", ("2",)), Atom("even", ("4",))]
+
+    ex1 = build_example_from_positives(
+        atom_to_idx=atom_to_idx,
+        constants=C,
+        pred_name="even",
+        arity=1,
+        positive_atoms=positives,
+        hard_facts=B,
+        soft_facts=[],
+    )
+    ex2 = build_example_from_positives(
+        atom_to_idx=atom_to_idx,
+        constants=C,
+        pred_name="even",
+        arity=1,
+        positive_atoms=positives,
+        hard_facts=B,
+        soft_facts=[],
+    )
+
+    cfg = TrainConfig(
+        epochs=40,              # small for smoke
+        lr=5e-2,
+        temperature_start=2.0,
+        temperature_end=0.5,
+        entropy_coeff=1e-3,
+        log_every=9999,         # avoid spam in tests
+    )
+
+    # If this runs without exceptions, the test passes
+    train_program_examples(
+        learner=learner,
+        examples=[ex1, ex2],
+        atom_to_idx=atom_to_idx,
+        n=n,
+        bot_idx=bot_idx,
+        T=Pi.T,
+        cfg=cfg,
+        clause_texts=None,
+        device=torch.device("cpu"),
+    )
+
+
+if __name__ == "__main__":
+    test_build_example_even()
+    test_train_program_examples_smoke()
+    print("✅ tests/test_examples.py passed")
