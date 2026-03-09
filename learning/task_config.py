@@ -14,6 +14,7 @@ class TaskConfig:
     # Language
     constants: List[str]
     predicates: List[Predicate]
+    arg_domains: Dict[PredicateKey, List[List[str]]]
 
     # Target / aux
     target_key: PredicateKey

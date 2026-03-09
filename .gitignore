@@ -38,3 +38,7 @@ dist/
 # Ignored data
 data/**/*.pt
 data_root/
+data/raw
+
+#Files
+*.pdf

@@ -1,48 +1,38 @@
 from __future__ import annotations
 
+from learning.task_config import TaskConfig
+from learning.bias import BiasConfig
 from logic.atoms import Predicate
 from logic.templates import RuleTemplate
-from learning.bias import BiasConfig
-from learning.task_config import TaskConfig
-from learning.data import PredicateKey
 
-# Import types only for type hints (not required at runtime)
-from logic.clauses import Clause
-from logic.clauses import Var
+from logic.clauses import Clause, Var  # usa i tuoi tipi
 
 
 def make_config() -> TaskConfig:
-    MODE = "medium"   # "tight" or "medium"
-    # Constants (typed domains)
-    digits = [str(d) for d in range(10)]
-    sums = [str(s) for s in range(19)]
+    digits = [str(d) for d in range(5)]      # 0..4
+    sums = [str(s) for s in range(9)]        # 0..8
 
-    # IMPORTANT: dedupe constants (0..9 appears in digits and sums)
+    # Dedup constants
     raw = digits + sums
     C = list(dict.fromkeys(raw))
 
-    # Typed grounding domains per predicate/arg
     arg_domains = {
         ("digit1", 1): [digits],
         ("digit2", 1): [digits],
         ("sum_is", 1): [sums],
-        ("tmp", 2): [sums, digits],      # tmp(S, A)
-        ("add", 3): [digits, digits, sums],  # add(A, B, S)
+        ("tmp", 2): [sums, digits],              # tmp(S,A)
+        ("add", 3): [digits, digits, sums],      # add(A,B,S)
     }
 
     predicates = [
-        Predicate("digit1", 1, "E"),   # from CBM image1
-        Predicate("digit2", 1, "E"),   # from CBM image2
-        Predicate("add", 3, "E"),      # truth table hard facts
-        Predicate("tmp", 2, "I"),      # tmp(S,A) aux
-        Predicate("sum_is", 1, "I"),   # target
+        Predicate("digit1", 1, "E"),
+        Predicate("digit2", 1, "E"),
+        Predicate("add", 3, "E"),
+        Predicate("tmp", 2, "I"),
+        Predicate("sum_is", 1, "I"),
     ]
 
-    # Templates Π
-    # tmp(S,A) :- digit2(B), add(A,B,S)  needs v=1 (B), int_flag=0
     tau_tmp = RuleTemplate(v=1, int_flag=0)
-
-    # sum_is(S) :- digit1(A), tmp(S,A)  needs v=1 (A), int_flag=1 (uses intensional tmp)
     tau_sum_1 = RuleTemplate(v=1, int_flag=1)
     tau_sum_2 = RuleTemplate(v=1, int_flag=1)
 
@@ -51,18 +41,9 @@ def make_config() -> TaskConfig:
         ("sum_is", 1): (tau_sum_1, tau_sum_2),
     }
 
-    # --------- Custom "mode" filters (HUGE pruning) ---------
-    # Vars are created by your generator:
-    # - head tmp/2 uses Var("X"), Var("Y")
-    # - v=1 introduces Var("Z0")
-    #
-    # We enforce exactly:
-    #   tmp(X,Y) :- digit2(Z0), add(Y,Z0,X).
-    #
-    # and for sum_is/1:
-    #   sum_is(X) :- digit1(Z0), tmp(X,Z0).
-    #
-    # This collapses tmp clause sets from hundreds to ~1.
+    # Bias “medium safe”: tmp ha 2 varianti (commutatività A,B),
+    # sum_is resta “safe” (1 sola) per stabilità.
+    MODE = "medium"
 
     def tmp_mode_filter(c: Clause) -> bool:
         b1, b2 = c.body
@@ -78,17 +59,14 @@ def make_config() -> TaskConfig:
         if not isinstance(z0, Var) or z0.name != "Z0":
             return False
 
-        # ---- TIGHT: only add(Y, Z0, X) ----
         if MODE == "tight":
             return add_atom.args == (head_y, z0, head_x)
 
-        # ---- MEDIUM: allow a few variants (still tiny search space) ----
         allowed_add_args = {
-            (head_y, z0, head_x),   # correct: add(A,B,S) with tmp(S,A)
-            (z0, head_y, head_x),   # swap A/B (should still be valid because add is commutative in truth table)
+            (head_y, z0, head_x),
+            (z0, head_y, head_x),
         }
         return add_atom.args in allowed_add_args
-
 
     def sum_mode_filter(c: Clause) -> bool:
         b1, b2 = c.body
@@ -96,8 +74,7 @@ def make_config() -> TaskConfig:
         if preds != {"digit1", "tmp"}:
             return False
 
-        (head_x,) = c.head.args  # sum_is(X)
-
+        (head_x,) = c.head.args
         digit_atom = b1 if b1.pred == "digit1" else b2
         tmp_atom = b2 if digit_atom is b1 else b1
 
@@ -105,16 +82,8 @@ def make_config() -> TaskConfig:
         if not isinstance(z0, Var) or z0.name != "Z0":
             return False
 
-        # ---- TIGHT: only tmp(X, Z0) ----
-        if MODE == "tight":
-            return tmp_atom.args == (head_x, z0)
-
-        # ---- MEDIUM: allow a couple variants ----
-        allowed_tmp_args = {
-            (head_x, z0),  # intended: tmp(S,A) with A from digit1
-            (z0, head_x),  # “wrong” wiring (lets ILP try a shortcut / failure mode)
-        }
-        return tmp_atom.args in allowed_tmp_args
+        # safe wiring only
+        return tmp_atom.args == (head_x, z0)
 
     bias = BiasConfig(
         allowed_body_preds={

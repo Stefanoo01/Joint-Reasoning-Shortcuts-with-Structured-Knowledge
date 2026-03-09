@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
 from logic.atoms import Atom, BOT, Predicate
 
+PredicateKey = Tuple[str, int]
 
 @dataclass(frozen=True, slots=True)
 class LanguageSpec:
@@ -15,6 +16,7 @@ class LanguageSpec:
     """
     constants: List[str]
     predicates: List[Predicate]
+    arg_domains: Dict[PredicateKey, List[List[str]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.constants:
@@ -41,8 +43,10 @@ def build_ground_atoms(spec: LanguageSpec) -> list[Atom]:
     """
     Build the ordered list G of all ground atoms over the language,
     plus BOT as the last atom.
-    """
 
+    If spec.arg_domains provides typed domains for a predicate, use them;
+    otherwise fall back to full cartesian product over spec.constants.
+    """
     sorted_cns = sorted(spec.constants)
     sorted_preds = sorted(
         spec.predicates,
@@ -52,22 +56,33 @@ def build_ground_atoms(spec: LanguageSpec) -> list[Atom]:
     G: List[Atom] = []
 
     for p in sorted_preds:
+        key = (p.name, p.arity)
+
         if p.arity == 0:
             G.append(Atom(p.name, ()))
+            continue
 
-        elif p.arity == 1:
-            for c in sorted_cns:
-                G.append(Atom(p.name, (c,)))
+        # Select domains per argument (typed) or fallback (untyped)
+        domains = spec.arg_domains.get(key, None)
+        if domains is None:
+            domains = [sorted_cns for _ in range(p.arity)]
+        else:
+            if len(domains) != p.arity:
+                raise ValueError(f"arg_domains[{key}] must have length {p.arity}, got {len(domains)}")
+
+        if p.arity == 1:
+            for c1 in domains[0]:
+                G.append(Atom(p.name, (c1,)))
 
         elif p.arity == 2:
-            for c1 in sorted_cns:
-                for c2 in sorted_cns:
+            for c1 in domains[0]:
+                for c2 in domains[1]:
                     G.append(Atom(p.name, (c1, c2)))
 
         elif p.arity == 3:
-            for c1 in sorted_cns:
-                for c2 in sorted_cns:
-                    for c3 in sorted_cns:
+            for c1 in domains[0]:
+                for c2 in domains[1]:
+                    for c3 in domains[2]:
                         G.append(Atom(p.name, (c1, c2, c3)))
 
         else:
@@ -77,7 +92,7 @@ def build_ground_atoms(spec: LanguageSpec) -> list[Atom]:
 
     # Check duplicates
     if len(set(G)) != len(G):
-        raise ValueError("Duplicate ground atoms generated (check predicates/constants)")
+        raise ValueError("Duplicate ground atoms generated (check predicates/constants/domains)")
 
     return G
 

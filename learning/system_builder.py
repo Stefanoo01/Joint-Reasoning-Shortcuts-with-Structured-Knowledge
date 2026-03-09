@@ -29,7 +29,11 @@ class SystemBundle:
 
 def build_system_from_config(cfg: TaskConfig) -> SystemBundle:
     # 1) Language
-    spec = LanguageSpec(constants=cfg.constants, predicates=cfg.predicates)
+    spec = LanguageSpec(
+        constants=cfg.constants,
+        predicates=cfg.predicates,
+        arg_domains=getattr(cfg, "arg_domains", {}),
+    )
     G = build_ground_atoms(spec)
     atom_to_idx, idx_to_atom, bot_idx = build_index(G)
     print()
