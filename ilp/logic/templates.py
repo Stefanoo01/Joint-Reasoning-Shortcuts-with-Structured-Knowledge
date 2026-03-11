@@ -54,8 +54,8 @@ class ProgramTemplate:
         for (name, arity), pair in self.rules.items():
             if not isinstance(name, str) or not name:
                 raise ValueError("rules keys must have a non-empty predicate name")
-            if arity not in {0, 1, 2}:
-                raise ValueError("rules keys must have arity 0,1,2")
+            if arity not in {0, 1, 2, 3}:
+                raise ValueError("rules keys must have arity 0,1,2,3")
             if not isinstance(pair, tuple) or len(pair) != 2:
                 raise ValueError("rules[p] must be a pair (tau1, tau2)")
 

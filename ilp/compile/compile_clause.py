@@ -65,7 +65,14 @@ def enumerate_ground_heads_for_predicate(
             for c2 in constants_sorted:
                 out.append(Atom(head_pred, (c1, c2)))
         return out
-    raise ValueError("head_arity must be 0,1,2")
+    if head_arity == 3:
+        out: List[Atom] = []
+        for c1 in constants_sorted:
+            for c2 in constants_sorted:
+                for c3 in constants_sorted:
+                    out.append(Atom(head_pred, (c1, c2, c3)))
+        return out
+    raise ValueError("head_arity must be 0,1,2,3")
 
 
 def compile_clause_to_X(

@@ -103,9 +103,9 @@ def make_vars_for_head(head_arity: int, v: int) -> tuple[list[Var], list[Var]]:
     head_vars: list[Var] = []
     if head_arity >= 1:
         head_vars.append(Var("X"))
-    if head_arity == 2:
+    if head_arity >= 2:
         head_vars.append(Var("Y"))
-    if head_arity == 3:
+    if head_arity >= 3:
         head_vars.append(Var("Z"))
 
     extra_vars = [Var(f"Z{i}") for i in range(v)]
