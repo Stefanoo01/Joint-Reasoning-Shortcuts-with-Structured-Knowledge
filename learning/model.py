@@ -142,11 +142,16 @@ def bce_pos_neg(pred: torch.Tensor, pos_idx: list[int], neg_idx: list[int], eps:
     """
     pred: [n] in [0,1]
     Returns scalar BCE over pos/neg sets.
+    Handles empty pos/neg sets gracefully (returns 0 for that component).
     """
-    pos = pred[pos_idx].clamp(eps, 1 - eps)
-    neg = pred[neg_idx].clamp(eps, 1 - eps)
-    loss_pos = -(pos.log()).mean()
-    loss_neg = -((1 - neg).log()).mean()
+    loss_pos = torch.tensor(0.0, device=pred.device)
+    loss_neg = torch.tensor(0.0, device=pred.device)
+    if len(pos_idx) > 0:
+        pos = pred[pos_idx].clamp(eps, 1 - eps)
+        loss_pos = -(pos.log()).mean()
+    if len(neg_idx) > 0:
+        neg = pred[neg_idx].clamp(eps, 1 - eps)
+        loss_neg = -((1 - neg).log()).mean()
     return loss_pos + loss_neg
 
 def pair_distribution_entropy(W: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:

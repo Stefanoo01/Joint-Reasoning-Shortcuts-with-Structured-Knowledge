@@ -80,11 +80,24 @@ def make_config() -> TaskConfig:
             return False
 
         if MODE == "tight":
-            return add_atom.args == (head_y, z0, head_x)
+            # Il vecchio 'medium' diventa il nuovo 'tight'
+            allowed_add_args = {
+                (head_y, z0, head_x),   # add(A,B,S)
+                (z0, head_y, head_x),   # add(B,A,S)
+            }
+            return add_atom.args in allowed_add_args
 
+        # Nuovo 'medium': Allarghiamo moderatamente lo spazio di ricerca permettendo
+        # *qualsiasi permutazione* degli argomenti introdotte.
+        # Aumentiamo le combinazioni da 2 a 6. È uno spazio sufficientemente
+        # ampio per permettere all'ILP di distrarsi senza esplodere i tempi su CPU.
         allowed_add_args = {
-            (head_y, z0, head_x),   # correct: add(A,B,S) with tmp(S,A)
-            (z0, head_y, head_x),   # swap A/B  (commutative)
+            (head_y, z0, head_x),
+            (z0, head_y, head_x),
+            (head_x, head_y, z0),
+            (head_x, z0, head_y),
+            (head_y, head_x, z0),
+            (z0, head_x, head_y)
         }
         return add_atom.args in allowed_add_args
 
@@ -103,11 +116,20 @@ def make_config() -> TaskConfig:
             return False
 
         if MODE == "tight":
-            return tmp_atom.args == (head_x, z0)
+            # Il vecchio 'medium' diventa il nuovo 'tight'
+            allowed_tmp_args = {
+                (head_x, z0),  # intended: tmp(S,A) with A from digit1
+                (z0, head_x),  # "wrong" wiring
+            }
+            return tmp_atom.args in allowed_tmp_args
 
+        # Nuovo 'medium': Aggiungiamo anche le combinazioni dove la stessa
+        # variabile viene usata e ripetuta due volte. Espande da 2 a 4 combinazioni.
         allowed_tmp_args = {
-            (head_x, z0),  # intended: tmp(S,A) with A from digit1
-            (z0, head_x),  # "wrong" wiring (lets ILP try a shortcut)
+            (head_x, z0),
+            (z0, head_x),
+            (head_x, head_x),
+            (z0, z0)
         }
         return tmp_atom.args in allowed_tmp_args
 

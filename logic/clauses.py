@@ -207,13 +207,19 @@ def generate_clauses_for_template(
         for j in range(i, n):
             m2 = masks[j]
 
-            # Connectedness pruning: body atoms must share at least one variable
-            if (m1 & m2) == 0:
-                continue
-
             # Safety pruning: head vars must appear in the body
             if ((m1 | m2) & head_mask) != head_mask:
                 continue
+
+            # Connectedness pruning: head + body atoms must form a connected
+            # variable graph.  Two body atoms are "connected" if they share
+            # a variable directly (m1 & m2 != 0) **or** if both share at
+            # least one variable with the head.
+            if (m1 & m2) == 0:
+                # Body atoms don't share a variable directly — check that
+                # each body atom is connected to the head instead.
+                if (m1 & head_mask) == 0 or (m2 & head_mask) == 0:
+                    continue
 
             out.append(Clause(head=head, body=(b1, body_atoms[j])))
 

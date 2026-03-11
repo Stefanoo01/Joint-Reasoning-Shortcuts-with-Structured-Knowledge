@@ -49,3 +49,53 @@ class ToyEvenAdapter:
                 )
             )
         return out
+
+
+@dataclass(frozen=True)
+class ToySumParityAdapter:
+    """
+    Produces examples for the toy_sum_parity task.
+    One example per digit pair (a, b) where a, b in {0..4}.
+    """
+
+    def build_examples(self, bundle: SystemBundle) -> List[Example]:
+        C = bundle.spec.constants
+        atom_to_idx = bundle.atom_to_idx
+
+        # Background parity facts (same for all examples)
+        parity_facts = [
+            Atom("is_even", (str(d),)) for d in range(6) if d % 2 == 0
+        ] + [
+            Atom("is_odd", (str(d),)) for d in range(6) if d % 2 == 1
+        ]
+
+        out: List[Example] = []
+        for a in range(6):
+            for b in range(6):
+                sa, sb = str(a), str(b)
+
+                # Per-example facts: which digits are given
+                hard_facts = parity_facts + [
+                    Atom("digit1", (sa,)),
+                    Atom("digit2", (sb,)),
+                ]
+
+                # Target: sum_even(digit1_value) is positive iff sum is even
+                s = a + b
+                if s % 2 == 0:
+                    positives = [Atom("sum_even", (sa,))]
+                else:
+                    positives = []  # no positives when sum is odd
+
+                out.append(
+                    build_example_from_positives(
+                        atom_to_idx=atom_to_idx,
+                        constants=C,
+                        pred_name="sum_even",
+                        arity=1,
+                        positive_atoms=positives,
+                        hard_facts=hard_facts,
+                        soft_facts=[],
+                    )
+                )
+        return out

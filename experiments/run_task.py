@@ -7,7 +7,7 @@ from configs.registry import TASK_CONFIGS
 from learning.system_builder import build_system_from_config
 from learning.trainer import TrainConfig, train_program_examples
 
-from data.adapters import ToyEvenAdapter
+from data.adapters import ToyEvenAdapter, ToySumParityAdapter
 
 
 def main() -> None:
@@ -25,9 +25,10 @@ def main() -> None:
     bundle = build_system_from_config(cfg)
 
     # 3) Build examples via adapter
-    # For now only toy_even adapter is wired; we extend this registry later
     if args.task == "toy_even":
         adapter = ToyEvenAdapter(num_examples=2)
+    elif args.task == "toy_sum_parity":
+        adapter = ToySumParityAdapter()
     else:
         raise RuntimeError("No adapter registered for this task yet")
 

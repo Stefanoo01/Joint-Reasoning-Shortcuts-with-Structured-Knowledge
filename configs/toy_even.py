@@ -37,6 +37,7 @@ def make_config() -> TaskConfig:
     return TaskConfig(
         constants=C,
         predicates=predicates,
+        arg_domains={},
         target_key=("even", 1),
         aux_keys=[("succ2", 2)],
         templates=templates,
