@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
-from logic.atoms import Atom
-from learning.data import Targets
+from ilp.logic.atoms import Atom
+from ilp.learning.data import Targets
 
 
 @dataclass(frozen=True)

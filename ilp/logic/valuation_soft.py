@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, Tuple
 import torch
 
-from logic.atoms import Atom
+from ilp.logic.atoms import Atom
 
 
 def build_a0_from_facts(

@@ -3,15 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Tuple, List
 
-from learning.data import PredicateKey
-from learning.bias import BiasConfig, apply_bias
-from learning.compile_cache import compile_clause_set_stack
-from learning.model import PredicateClauseCache
+from ilp.learning.data import PredicateKey
+from ilp.learning.bias import BiasConfig, apply_bias
+from ilp.learning.compile_cache import compile_clause_set_stack
+from ilp.learning.model import PredicateClauseCache
 
-from logic.atoms import Predicate
-from logic.clauses import Clause
-from logic.templates import ProgramTemplate
-from logic.clauses import generate_clauses_for_template
+from ilp.logic.atoms import Predicate
+from ilp.logic.clauses import Clause
+from ilp.logic.templates import ProgramTemplate
+from ilp.logic.clauses import generate_clauses_for_template
 
 
 @dataclass(frozen=True)

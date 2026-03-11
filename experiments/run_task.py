@@ -4,8 +4,8 @@ import argparse
 import torch
 
 from configs.registry import TASK_CONFIGS
-from learning.system_builder import build_system_from_config
-from learning.trainer import TrainConfig, train_program_examples
+from ilp.learning.system_builder import build_system_from_config
+from ilp.learning.trainer import TrainConfig, train_program_examples
 
 from data.adapters import ToyEvenAdapter, ToySumParityAdapter
 

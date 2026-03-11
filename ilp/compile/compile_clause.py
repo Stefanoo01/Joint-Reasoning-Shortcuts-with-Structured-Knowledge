@@ -1,8 +1,8 @@
 from __future__ import annotations
 from itertools import product
 from typing import Dict, List
-from logic.atoms import Atom
-from logic.clauses import AtomSchema, Clause, Var
+from ilp.logic.atoms import Atom
+from ilp.logic.clauses import AtomSchema, Clause, Var
 
 Subst = Dict[Var, str]  # variable -> constant
 

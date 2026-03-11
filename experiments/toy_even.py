@@ -1,19 +1,19 @@
 from __future__ import annotations
 import torch
-from logic.atoms import Atom, BOT, Predicate
-from logic.language import LanguageSpec, build_ground_atoms, build_index
-from logic.valuation import build_a0
-from logic.templates import RuleTemplate, ProgramTemplate
-from logic.clauses import generate_clauses_for_template
-from compile.compile_clause import compile_clause_to_X
-from logic.infer import f_clause, infer_one_step, infer_T
-from learning.data import build_targets_from_positives
-from learning.compile_cache import compile_clause_set_stack
-from learning.model import ProgramLearner, PredicateClauseCache
-from learning.trainer import train_program, TrainConfig
-from learning.bias import BiasConfig
-from learning.build_program import build_clause_sets_for_program, build_caches_with_bias
-from logic.valuation_soft import build_a0_from_facts
+from ilp.logic.atoms import Atom, BOT, Predicate
+from ilp.logic.language import LanguageSpec, build_ground_atoms, build_index
+from ilp.logic.valuation import build_a0
+from ilp.logic.templates import RuleTemplate, ProgramTemplate
+from ilp.logic.clauses import generate_clauses_for_template
+from ilp.compile.compile_clause import compile_clause_to_X
+from ilp.logic.infer import f_clause, infer_one_step, infer_T
+from ilp.learning.data import build_targets_from_positives
+from ilp.learning.compile_cache import compile_clause_set_stack
+from ilp.learning.model import ProgramLearner, PredicateClauseCache
+from ilp.learning.trainer import train_program, TrainConfig
+from ilp.learning.bias import BiasConfig
+from ilp.learning.build_program import build_clause_sets_for_program, build_caches_with_bias
+from ilp.logic.valuation_soft import build_a0_from_facts
 
 def main() -> None:
     # Constants

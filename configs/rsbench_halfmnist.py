@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from learning.task_config import TaskConfig
-from learning.bias import BiasConfig
-from logic.atoms import Predicate
-from logic.templates import RuleTemplate
+from ilp.learning.task_config import TaskConfig
+from ilp.learning.bias import BiasConfig
+from ilp.logic.atoms import Predicate
+from ilp.logic.templates import RuleTemplate
 
-from logic.clauses import Clause, Var  # usa i tuoi tipi
+from ilp.logic.clauses import Clause, Var  # usa i tuoi tipi
 
 
 def make_config() -> TaskConfig:

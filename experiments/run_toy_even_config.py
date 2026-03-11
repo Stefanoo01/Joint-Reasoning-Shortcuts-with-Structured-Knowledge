@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import torch
 
-from logic.atoms import Atom
+from ilp.logic.atoms import Atom
 from configs.toy_even import make_config
-from learning.system_builder import build_system_from_config
-from learning.examples import build_example_from_positives
-from learning.trainer import TrainConfig, train_program_examples
-from learning.trainer import extract_hard_program  # se lo hai già, altrimenti commenta
+from ilp.learning.system_builder import build_system_from_config
+from ilp.learning.examples import build_example_from_positives
+from ilp.learning.trainer import TrainConfig, train_program_examples
+from ilp.learning.trainer import extract_hard_program  # se lo hai già, altrimenti commenta
 
 
 def main() -> None:

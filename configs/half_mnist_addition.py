@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from logic.atoms import Predicate
-from logic.templates import RuleTemplate
-from learning.bias import BiasConfig
-from learning.task_config import TaskConfig
-from learning.data import PredicateKey
+from ilp.logic.atoms import Predicate
+from ilp.logic.templates import RuleTemplate
+from ilp.learning.bias import BiasConfig
+from ilp.learning.task_config import TaskConfig
+from ilp.learning.data import PredicateKey
 
 # Import types only for type hints (not required at runtime)
-from logic.clauses import Clause
-from logic.clauses import Var
+from ilp.logic.clauses import Clause
+from ilp.logic.clauses import Var
 
 
 def make_config() -> TaskConfig:

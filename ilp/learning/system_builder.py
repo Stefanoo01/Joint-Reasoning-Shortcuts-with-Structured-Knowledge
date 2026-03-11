@@ -3,14 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
-from logic.atoms import Atom, Predicate
-from logic.language import LanguageSpec, build_ground_atoms, build_index
-from logic.templates import ProgramTemplate
+from ilp.logic.atoms import Atom, Predicate
+from ilp.logic.language import LanguageSpec, build_ground_atoms, build_index
+from ilp.logic.templates import ProgramTemplate
 
-from learning.task_config import TaskConfig
-from learning.data import PredicateKey
-from learning.build_program import build_clause_sets_for_program, build_caches_with_bias
-from learning.model import ProgramLearner
+from ilp.learning.task_config import TaskConfig
+from ilp.learning.data import PredicateKey
+from ilp.learning.build_program import build_clause_sets_for_program, build_caches_with_bias
+from ilp.learning.model import ProgramLearner
 
 
 @dataclass

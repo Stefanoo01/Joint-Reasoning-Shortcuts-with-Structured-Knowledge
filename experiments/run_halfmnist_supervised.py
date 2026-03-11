@@ -23,13 +23,13 @@ from datasets.halfmnist import HALFMNIST
 from models.mnistcbm import MnistCBM
 
 # Differentiable ILP imports
-from logic.atoms import Atom
-from logic.valuation_soft import build_a0_from_indexed_facts
+from ilp.logic.atoms import Atom
+from ilp.logic.valuation_soft import build_a0_from_indexed_facts
 from configs.half_mnist_addition import make_config
-from learning.system_builder import build_system_from_config
-from learning.model import bce_pos_neg
-from learning.data import build_targets_from_positives_domains
-from learning.trainer import linear_anneal
+from ilp.learning.system_builder import build_system_from_config
+from ilp.learning.model import bce_pos_neg
+from ilp.learning.data import build_targets_from_positives_domains
+from ilp.learning.trainer import linear_anneal
 
 
 def build_add_truth_table_hard_idx(atom_to_idx) -> torch.Tensor:

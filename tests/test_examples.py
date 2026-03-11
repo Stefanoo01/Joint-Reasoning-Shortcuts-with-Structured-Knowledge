@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import torch
 
-from logic.atoms import Atom, BOT, Predicate
-from logic.language import LanguageSpec, build_ground_atoms, build_index
-from logic.templates import RuleTemplate, ProgramTemplate
+from ilp.logic.atoms import Atom, BOT, Predicate
+from ilp.logic.language import LanguageSpec, build_ground_atoms, build_index
+from ilp.logic.templates import RuleTemplate, ProgramTemplate
 
-from learning.bias import BiasConfig
-from learning.build_program import build_clause_sets_for_program, build_caches_with_bias
-from learning.model import ProgramLearner
-from learning.examples import build_example_from_positives
-from learning.trainer import TrainConfig, train_program_examples
+from ilp.learning.bias import BiasConfig
+from ilp.learning.build_program import build_clause_sets_for_program, build_caches_with_bias
+from ilp.learning.model import ProgramLearner
+from ilp.learning.examples import build_example_from_positives
+from ilp.learning.trainer import TrainConfig, train_program_examples
 
 def _setup():
     C = ["0", "1", "2", "3", "4", "5"]

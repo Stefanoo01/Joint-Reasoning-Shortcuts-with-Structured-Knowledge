@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
-from logic.atoms import Atom, BOT, Predicate
+from ilp.logic.atoms import Atom, BOT, Predicate
 
 PredicateKey = Tuple[str, int]
 

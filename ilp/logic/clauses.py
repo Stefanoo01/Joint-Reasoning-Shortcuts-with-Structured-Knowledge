@@ -1,8 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Set, Tuple
-from logic.atoms import Predicate
-from logic.templates import RuleTemplate
+from ilp.logic.atoms import Predicate
+from ilp.logic.templates import RuleTemplate
 
 @dataclass(frozen=True, slots=True)
 class Var:

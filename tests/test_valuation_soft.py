@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import torch
 
-from logic.atoms import Atom, BOT, Predicate
-from logic.language import LanguageSpec, build_ground_atoms, build_index
-from logic.valuation_soft import build_a0_from_facts
+from ilp.logic.atoms import Atom, BOT, Predicate
+from ilp.logic.language import LanguageSpec, build_ground_atoms, build_index
+from ilp.logic.valuation_soft import build_a0_from_facts
 
 
 def _setup_toy_even():

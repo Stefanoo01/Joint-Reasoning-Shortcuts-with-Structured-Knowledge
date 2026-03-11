@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from configs.toy_even import make_config
-from learning.system_builder import build_system_from_config
+from ilp.learning.system_builder import build_system_from_config
 
 
 def test_build_system_from_config():

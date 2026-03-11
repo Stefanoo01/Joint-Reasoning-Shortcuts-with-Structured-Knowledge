@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Set, Tuple, List, Optional, Callable
 
-from learning.data import PredicateKey
-from logic.clauses import Clause
+from ilp.learning.data import PredicateKey
+from ilp.logic.clauses import Clause
 
 
 @dataclass(frozen=True)

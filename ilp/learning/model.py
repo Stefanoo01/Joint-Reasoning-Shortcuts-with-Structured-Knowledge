@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple
 import torch
 import torch.nn as nn
-from learning.data import PredicateKey
+from ilp.learning.data import PredicateKey
 
 
 @dataclass(frozen=True)

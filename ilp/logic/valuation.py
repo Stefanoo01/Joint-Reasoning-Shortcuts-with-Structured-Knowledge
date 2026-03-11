@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import List
-from logic.atoms import Atom
+from ilp.logic.atoms import Atom
 
 def build_a0(
     n: int,

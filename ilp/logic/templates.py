@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
-from logic.atoms import Predicate
+from ilp.logic.atoms import Predicate
 
 @dataclass(frozen=True, slots=True)
 class RuleTemplate:

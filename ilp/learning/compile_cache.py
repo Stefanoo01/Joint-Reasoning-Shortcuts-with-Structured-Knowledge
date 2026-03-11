@@ -1,9 +1,9 @@
 from __future__ import annotations
 from typing import Dict, List
 import torch
-from logic.atoms import Atom
-from logic.clauses import Clause
-from compile.compile_clause import compile_clause_to_X
+from ilp.logic.atoms import Atom
+from ilp.logic.clauses import Clause
+from ilp.compile.compile_clause import compile_clause_to_X
 
 
 def compile_clause_set_stack(

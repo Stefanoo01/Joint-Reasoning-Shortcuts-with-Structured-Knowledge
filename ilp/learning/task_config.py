@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
-from logic.atoms import Predicate
-from logic.templates import RuleTemplate
-from learning.data import PredicateKey
-from learning.bias import BiasConfig
+from ilp.logic.atoms import Predicate
+from ilp.logic.templates import RuleTemplate
+from ilp.learning.data import PredicateKey
+from ilp.learning.bias import BiasConfig
 
 
 @dataclass(frozen=True)

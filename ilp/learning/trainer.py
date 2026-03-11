@@ -6,10 +6,10 @@ from typing import Dict, Tuple, List
 import torch
 import torch.nn as nn
 
-from learning.data import PredicateKey, Targets
-from learning.model import ProgramLearner, bce_pos_neg, pair_distribution_entropy
-from learning.examples import Example
-from logic.valuation_soft import build_a0_from_facts
+from ilp.learning.data import PredicateKey, Targets
+from ilp.learning.model import ProgramLearner, bce_pos_neg, pair_distribution_entropy
+from ilp.learning.examples import Example
+from ilp.logic.valuation_soft import build_a0_from_facts
 
 
 @dataclass
@@ -141,10 +141,10 @@ def extract_hard_program(
     return out
 
 from typing import Dict
-from logic.atoms import Atom
-from learning.data import PredicateKey
-from learning.examples import Example
-from logic.valuation_soft import build_a0_from_facts
+from ilp.logic.atoms import Atom
+from ilp.learning.data import PredicateKey
+from ilp.learning.examples import Example
+from ilp.logic.valuation_soft import build_a0_from_facts
 
 
 def train_program_examples(

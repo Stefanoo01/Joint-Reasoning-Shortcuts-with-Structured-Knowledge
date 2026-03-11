@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Protocol, Optional
 
-from logic.atoms import Atom
-from learning.examples import Example, build_example_from_positives
-from learning.system_builder import SystemBundle
+from ilp.logic.atoms import Atom
+from ilp.learning.examples import Example, build_example_from_positives
+from ilp.learning.system_builder import SystemBundle
 
 
 class ExampleAdapter(Protocol):
