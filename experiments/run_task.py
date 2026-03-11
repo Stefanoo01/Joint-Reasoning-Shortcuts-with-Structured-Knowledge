@@ -15,7 +15,7 @@ def main() -> None:
     parser.add_argument("--task", type=str, required=True, choices=TASK_CONFIGS.keys())
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=5e-2)
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
 
     # 1) Load config

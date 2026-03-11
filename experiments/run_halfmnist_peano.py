@@ -22,7 +22,7 @@ from models.mnistcbm import MnistCBM
 
 from ilp.logic.atoms import Atom
 from ilp.logic.valuation_soft import build_a0_from_indexed_facts
-from configs.half_mnist_odd_sum import make_config
+from configs.half_mnist_peano import make_config
 from ilp.learning.system_builder import build_system_from_config
 from ilp.learning.model import bce_pos_neg
 from ilp.learning.data import build_targets_from_positives_domains
@@ -31,16 +31,20 @@ from ilp.learning.trainer import linear_anneal
 
 def build_hard_idx(atom_to_idx) -> torch.Tensor:
     hard_atoms = []
+    
     # 1. zero/1
     hard_atoms.append(Atom("zero", ("0",)))
-    # 2. even_num/1
-    hard_atoms.append(Atom("even_num", ("0",)))
-    hard_atoms.append(Atom("even_num", ("2",)))
-    hard_atoms.append(Atom("even_num", ("4",)))
-    # 3. succ/2
-    for d in range(4):
+    
+    # 2. succ/2
+    for d in range(8):
         hard_atoms.append(Atom("succ", (str(d), str(d+1))))
         
+    # 3. step/3 representing (A, PrevS, S) meaning: We stepped A down to A-1, and stepped PrevS up to S
+    # We generate this strictly for 0..4 digits and 0..8 sums to speed up DILP.
+    for a in range(1, 5):
+        for s in range(1, 9):
+            hard_atoms.append(Atom("step", (str(s), str(s-1), str(a))))
+            
     hard_idx = torch.tensor([atom_to_idx[a] for a in hard_atoms], dtype=torch.long)
     return hard_idx
 
@@ -52,25 +56,16 @@ def build_digit12_soft_idx(atom_to_idx) -> torch.Tensor:
         atoms.append(Atom("digit2", (str(d),)))
     return torch.tensor([atom_to_idx[a] for a in atoms], dtype=torch.long)
 
-
-def build_is_odd_targets(atom_to_idx, cfg, true_sum: int):
-    # Determine the boolean truth
-    is_odd = (true_sum % 2 == 1)
-    
-    positives = []
-    if is_odd:
-        positives.append(Atom("is_odd", ()))
-        
+def build_sum_is_targets(atom_to_idx, cfg, true_sum: int):
     return build_targets_from_positives_domains(
         atom_to_idx=atom_to_idx,
-        pred_name="is_odd",
-        domains=[], # Arity 0
-        positive_atoms=positives,
+        pred_name="sum_is",
+        domains=[[str(s) for s in range(9)]],
+        positive_atoms=[Atom("sum_is", (str(true_sum),))],
     )
 
-def build_is_odd_idx(atom_to_idx) -> torch.Tensor:
-    # 0 arity predicate index 
-    atoms = [Atom("is_odd", ())]
+def build_sum_is_idx(atom_to_idx) -> torch.Tensor:
+    atoms = [Atom("sum_is", (str(s),)) for s in range(9)]
     return torch.tensor([atom_to_idx[a] for a in atoms], dtype=torch.long)
 
 @torch.no_grad()
@@ -85,7 +80,7 @@ def evaluate(
     T: int,
     soft_idx_digit: torch.Tensor,
     hard_idx: torch.Tensor,
-    is_odd_idx: torch.Tensor,
+    sum_is_idx: torch.Tensor,
     targets_cache: list,
 ) -> dict:
     cbm.eval()
@@ -99,7 +94,6 @@ def evaluate(
     loss_task_sum = 0.0
     loss_concepts_sum = 0.0
     
-    # Track the shortcut mappings
     from collections import Counter
     shortcut_map = Counter()
 
@@ -124,7 +118,6 @@ def evaluate(
 
         sum_hat_cbm = (d1_hat + d2_hat).detach().cpu().tolist()
 
-        # Track mappings
         for i in range(B):
             if s_true_list[i] in [0, 1, 5, 6]:
                 shortcut_map[(s_true_list[i], int(d1_hat[i]), int(d2_hat[i]))] += 1
@@ -147,31 +140,27 @@ def evaluate(
             aT = learner.infer_T_paper(a0, T=T, temperature=1.0, fast=True)
 
             s = s_true_list[i]
-            is_odd_truth = (s % 2 == 1)
             
             # CBM logical resolution
-            is_odd_cbm = (sum_hat_cbm[i] % 2 == 1)
-            if is_odd_cbm == is_odd_truth:
+            if sum_hat_cbm[i] == s:
                 correct_task_cbm += 1
 
-            # ILP continuous resolution
-            score_odd = aT[is_odd_idx].squeeze().item()
-            is_odd_ilp = (score_odd > 0.5)
-            if is_odd_ilp == is_odd_truth:
+            # ILP logical resolution
+            scores = aT[sum_is_idx]
+            s_hat_ilp = int(torch.argmax(scores).item())
+            if s_hat_ilp == s:
                 correct_task_ilp += 1
 
-            ilp_targets = targets_cache[s] # We indexed targets by sum (0-8)
+            ilp_targets = targets_cache[s]
             loss_task_sum += float(bce_pos_neg(aT, ilp_targets.pos_idx, ilp_targets.neg_idx).item())
 
         total += B
 
-
-    # Log the mappings sorted by True Sum
-    print("\n--- Model Reasoning Shortcut Mappings (Odd Task) ---")
+    print("\n--- Model Reasoning Shortcut Mappings (Peano Addition Task) ---")
     for (s_true, d1, d2), count in sorted(shortcut_map.items()):
         if count > 10: 
-            print(f"When True Sum was {s_true} (Odd={s_true%2==1}), CBM guessed digits: ({d1}, {d2})")
-    print("------------------------------------------------------")
+            print(f"When True Sum was {s_true}, CBM guessed digits: ({d1}, {d2})")
+    print("-----------------------------------------------------------------")
 
     return {
         "loss_task": loss_task_sum / total,
@@ -185,7 +174,7 @@ def main():
     parser = get_parser()
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--lambda_mode", type=str, choices=["fixed", "schedule"], default="fixed")
-    parser.add_argument("--lam0", type=float, default=0.0) # Unsupervised out of the gate!
+    parser.add_argument("--lam0", type=float, default=0.0) 
     parser.add_argument("--lam1", type=float, default=0.0)
     parser.add_argument("--lam2", type=float, default=0.0)
 
@@ -198,14 +187,14 @@ def main():
 
     random.seed(args.seed or 123)
     torch.manual_seed(args.seed or 123)
-    device = torch.device("cpu")
+    device = torch.device("cpu") # User can override via cluster
 
-    print(f"Loading RSBench HALFMNIST for ODD SUM prediction... Lambda = {args.lam0}")
+    print(f"Loading RSBench HALFMNIST for PEANO ADD prediction... Lambda = {args.lam0}")
     dataset = HALFMNIST(args)
     train_loader, val_loader, test_loader = dataset.get_data_loaders()
 
     encoder, _ = dataset.get_backbone()
-    cbm = MnistCBM(encoder=encoder, n_images=2, args=args, n_facts=5, nr_classes=2).to(device)
+    cbm = MnistCBM(encoder=encoder, n_images=2, args=args, n_facts=5, nr_classes=9).to(device)
 
     cfg = make_config()
     bundle = build_system_from_config(cfg)
@@ -217,23 +206,14 @@ def main():
 
     hard_idx = build_hard_idx(atom_to_idx).to(device)
     soft_idx_digit = build_digit12_soft_idx(atom_to_idx).to(device) 
-    is_odd_idx = build_is_odd_idx(atom_to_idx).to(device)
+    sum_is_idx = build_sum_is_idx(atom_to_idx).to(device)
 
-    # Cache targets array indexed by sum
-    targets_cache = [build_is_odd_targets(atom_to_idx, cfg, true_sum=s) for s in range(9)]
+    targets_cache = [build_sum_is_targets(atom_to_idx, cfg, true_sum=s) for s in range(9)]
 
     opt = torch.optim.Adam(list(cbm.parameters()) + list(learner.parameters()), lr=1e-3)
 
-    def lambda_for_epoch(ep: int) -> float:
-        if args.lambda_mode == "fixed":
-            return args.lam0
-        if ep == 0: return args.lam0
-        if ep == 1: return args.lam1
-        return args.lam2
-
-    print("\nTraining ODD SUM Reasoning Shortcuts Pipeline...")
+    print("\nTraining PEANO RECURSIVE Addition Pipeline...")
     for ep in range(args.epochs):
-        lam = lambda_for_epoch(ep)
         cbm.train()
         learner.train()
 
@@ -274,7 +254,7 @@ def main():
                 loss_task = loss_task + bce_pos_neg(aT, ilp_targets.pos_idx, ilp_targets.neg_idx)
 
             loss_task = loss_task / B
-            loss = loss_task + lam * loss_concepts
+            loss = loss_task + args.lam0 * loss_concepts
 
             opt.zero_grad()
             loss.backward()
@@ -291,7 +271,7 @@ def main():
             T=bundle.program.T,
             soft_idx_digit=soft_idx_digit,
             hard_idx=hard_idx,
-            is_odd_idx=is_odd_idx,
+            sum_is_idx=sum_is_idx,
             targets_cache=targets_cache,
         )
 
