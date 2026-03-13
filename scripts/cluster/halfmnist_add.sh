@@ -2,7 +2,6 @@
 #SBATCH --job-name=halfmnist_add
 #SBATCH -N 1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
 #SBATCH --output=logs/halfmnist_add_%j.out
 #SBATCH --error=logs/halfmnist_add_%j.err
 #SBATCH --partition=edu-medium
@@ -11,8 +10,6 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 
-# Activate conda environment
-source activate join-reasoning
-
 # Run the script
+#SBATCH --ntasks=1
 python -m experiments.run_halfmnist_supervised --epochs 30
