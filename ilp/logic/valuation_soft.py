@@ -71,7 +71,7 @@ def build_a0_from_indexed_facts(
     n: int,
     bot_idx: int,
     soft_idx: torch.Tensor,  # [m] long
-    soft_val: torch.Tensor,  # [m] float, differentiable
+    soft_val: torch.Tensor,  # [m] or [B,m] float, differentiable
     hard_idx: Optional[torch.Tensor] = None,  # [h] long
 ) -> torch.Tensor:
     """
@@ -88,25 +88,48 @@ def build_a0_from_indexed_facts(
         raise ValueError("soft_idx must be torch.long")
     if soft_val.dtype not in (torch.float32, torch.float64):
         raise ValueError("soft_val must be float tensor")
-    if soft_idx.dim() != 1 or soft_val.dim() != 1:
-        raise ValueError("soft_idx and soft_val must be 1D")
-    if soft_idx.numel() != soft_val.numel():
-        raise ValueError("soft_idx and soft_val must have same length")
+    if soft_idx.dim() != 1:
+        raise ValueError("soft_idx must be 1D")
+    if soft_val.dim() not in (1, 2):
+        raise ValueError("soft_val must be 1D or 2D")
+    if soft_val.shape[-1] != soft_idx.numel():
+        raise ValueError("soft_idx and soft_val must have matching fact dimension")
 
     device = soft_val.device
-    a0_soft = torch.zeros(n, dtype=soft_val.dtype, device=device)
+    if soft_idx.device != device:
+        soft_idx = soft_idx.to(device)
 
-    # scatter max for soft facts
-    # (PyTorch supports scatter_reduce_ in recent versions)
-    a0_soft.scatter_reduce_(0, soft_idx, soft_val, reduce="amax", include_self=True)
+    if soft_val.dim() == 1:
+        a0_soft = torch.zeros(n, dtype=soft_val.dtype, device=device)
+
+        # scatter max for soft facts
+        a0_soft.scatter_reduce_(0, soft_idx, soft_val, reduce="amax", include_self=True)
+        a0 = a0_soft.clone()
+
+        # hard override
+        if hard_idx is not None:
+            if hard_idx.dtype != torch.long or hard_idx.dim() != 1:
+                raise ValueError("hard_idx must be 1D torch.long")
+            if hard_idx.device != device:
+                hard_idx = hard_idx.to(device)
+            a0[hard_idx] = 1.0
+
+        # BOT always 0
+        a0[bot_idx] = 0.0
+        return a0
+
+    batch_size = soft_val.shape[0]
+    a0_soft = torch.zeros(batch_size, n, dtype=soft_val.dtype, device=device)
+    soft_idx_batch = soft_idx.unsqueeze(0).expand(batch_size, -1)
+    a0_soft.scatter_reduce_(1, soft_idx_batch, soft_val, reduce="amax", include_self=True)
     a0 = a0_soft.clone()
 
-    # hard override
     if hard_idx is not None:
         if hard_idx.dtype != torch.long or hard_idx.dim() != 1:
             raise ValueError("hard_idx must be 1D torch.long")
-        a0[hard_idx] = 1.0
+        if hard_idx.device != device:
+            hard_idx = hard_idx.to(device)
+        a0[:, hard_idx] = 1.0
 
-    # BOT always 0
-    a0[bot_idx] = 0.0
+    a0[:, bot_idx] = 0.0
     return a0

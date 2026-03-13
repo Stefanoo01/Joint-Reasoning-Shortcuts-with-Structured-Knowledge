@@ -44,6 +44,30 @@ def top_pair_index(W: torch.Tensor, temperature: float = 1.0) -> Tuple[int, int,
     return j, k, prob
 
 
+def top_k_pair_indices(
+    W: torch.Tensor,
+    k: int,
+    temperature: float = 1.0,
+) -> List[Tuple[int, int, float]]:
+    """
+    Return the top-k clause pairs (j, k, prob) under softmax(W/temp).
+    """
+    if k <= 0:
+        return []
+
+    logits = (W / temperature).reshape(-1)
+    pi = torch.softmax(logits, dim=0)
+    top_probs, top_idx = torch.topk(pi, k=min(k, pi.numel()))
+
+    m2 = W.shape[1]
+    out = []
+    for idx, prob in zip(top_idx.tolist(), top_probs.tolist()):
+        j = idx // m2
+        k_idx = idx % m2
+        out.append((j, k_idx, float(prob)))
+    return out
+
+
 @torch.no_grad()
 def predicate_accuracy(aT: torch.Tensor, targets: Targets, threshold: float = 0.5) -> float:
     """
@@ -138,6 +162,22 @@ def extract_hard_program(
         W = learner.get_W(*key)
         j, k, prob = top_pair_index(W, temperature=temperature)
         out[key] = (j, k, prob)
+    return out
+
+
+@torch.no_grad()
+def extract_topk_program(
+    learner: ProgramLearner,
+    k: int = 5,
+    temperature: float = 0.2,
+) -> Dict[PredicateKey, List[Tuple[int, int, float]]]:
+    """
+    Return the top-k clause pairs per predicate under current W.
+    """
+    out = {}
+    for key in learner.caches.keys():
+        W = learner.get_W(*key)
+        out[key] = top_k_pair_indices(W, k=k, temperature=temperature)
     return out
 
 from typing import Dict

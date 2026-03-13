@@ -7,7 +7,7 @@ from configs.toy_even import make_config
 from ilp.learning.system_builder import build_system_from_config
 from ilp.learning.examples import build_example_from_positives
 from ilp.learning.trainer import TrainConfig, train_program_examples
-from ilp.learning.trainer import extract_hard_program  # se lo hai già, altrimenti commenta
+from ilp.learning.trainer import extract_topk_program
 
 
 def main() -> None:
@@ -78,14 +78,16 @@ def main() -> None:
         device=torch.device("cpu"),
     )
 
-    # 6) Print hard program (optional)
+    # 6) Print top-k learned clause pairs (optional)
     try:
-        hard = extract_hard_program(bundle.learner, temperature=0.2)
-        print("\n=== HARD PROGRAM ===")
-        for key, (j, k, prob) in hard.items():
-            print(f"{key} -> (j={j}, k={k}) prob={prob:.3f}")
-            print("  C1:", bundle.clause_texts[key][0][j])
-            print("  C2:", bundle.clause_texts[key][1][k])
+        ranked = extract_topk_program(bundle.learner, k=5, temperature=0.2)
+        print("\n=== TOP-5 ILP CLAUSE PAIRS ===")
+        for key, entries in ranked.items():
+            print(key)
+            for rank, (j, k, prob) in enumerate(entries, start=1):
+                print(f"  #{rank}: (j={j}, k={k}) prob={prob:.3f}")
+                print("    C1:", bundle.clause_texts[key][0][j])
+                print("    C2:", bundle.clause_texts[key][1][k])
     except Exception:
         pass
 

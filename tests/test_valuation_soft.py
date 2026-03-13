@@ -5,6 +5,7 @@ import torch
 from ilp.logic.atoms import Atom, BOT, Predicate
 from ilp.logic.language import LanguageSpec, build_ground_atoms, build_index
 from ilp.logic.valuation_soft import build_a0_from_facts
+from ilp.logic.valuation_soft import build_a0_from_indexed_facts
 
 
 def _setup_toy_even():
@@ -107,6 +108,37 @@ def test_bot_is_always_zero():
     assert float(a0[bot_idx].item()) == 0.0
 
 
+def test_build_a0_from_indexed_facts_batched():
+    C, G, atom_to_idx, bot_idx, B = _setup_toy_even()
+    n = len(G)
+
+    idx_even_2 = atom_to_idx[Atom("even", ("2",))]
+    idx_even_4 = atom_to_idx[Atom("even", ("4",))]
+    idx_zero_0 = atom_to_idx[Atom("zero", ("0",))]
+
+    soft_idx = torch.tensor([idx_even_2, idx_even_4], dtype=torch.long)
+    soft_val = torch.tensor([[0.2, 0.8], [0.5, 0.1]], dtype=torch.float32)
+    hard_idx = torch.tensor([idx_zero_0], dtype=torch.long)
+
+    a0 = build_a0_from_indexed_facts(
+        n=n,
+        bot_idx=bot_idx,
+        soft_idx=soft_idx,
+        soft_val=soft_val,
+        hard_idx=hard_idx,
+    )
+
+    assert a0.shape == (2, n)
+    assert abs(float(a0[0, idx_even_2].item()) - 0.2) < 1e-6
+    assert abs(float(a0[0, idx_even_4].item()) - 0.8) < 1e-6
+    assert abs(float(a0[1, idx_even_2].item()) - 0.5) < 1e-6
+    assert abs(float(a0[1, idx_even_4].item()) - 0.1) < 1e-6
+    assert float(a0[0, idx_zero_0].item()) == 1.0
+    assert float(a0[1, idx_zero_0].item()) == 1.0
+    assert float(a0[0, bot_idx].item()) == 0.0
+    assert float(a0[1, bot_idx].item()) == 0.0
+
+
 if __name__ == "__main__":
     # simple runner without pytest
     test_hard_facts_only()
@@ -114,4 +146,5 @@ if __name__ == "__main__":
     test_hard_overrides_soft()
     test_soft_duplicates_take_max()
     test_bot_is_always_zero()
+    test_build_a0_from_indexed_facts_batched()
     print("✅ tests/test_valuation_soft.py passed")
