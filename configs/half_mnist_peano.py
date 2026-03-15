@@ -6,12 +6,23 @@ from ilp.learning.bias import BiasConfig
 from ilp.learning.task_config import TaskConfig
 from ilp.logic.clauses import Clause, Var
 
-def make_config() -> TaskConfig:
+
+def make_config(mode: str = "medium", T: int = 8, variant: str = "base") -> TaskConfig:
     """
     ILP config for HALFMNIST Peano Task.
     Valid sums are in 0..8. Digits are 0..4.
     """
-    MODE = "medium"
+    if mode not in {"tight", "medium"}:
+        raise ValueError(f"Unsupported HalfMNIST Peano mode: {mode}")
+    if T <= 0:
+        raise ValueError("T must be > 0")
+    if variant != "base":
+        raise ValueError(
+            "Unsupported HalfMNIST Peano variant: "
+            f"{variant}. Known variants: base"
+        )
+
+    MODE = mode
 
     digits = [str(d) for d in range(5)]
     sums   = [str(s) for s in range(9)]
@@ -157,7 +168,7 @@ def make_config() -> TaskConfig:
         target_key=("sum_is", 1),
         aux_keys=[("add_p2", 3), ("add_p", 3), ("tmp", 2)],
         templates=templates,
-        T=8,
+        T=T,
         bias=bias,
         require_recursive_on_C2=require_recursive_on_C2,
     )

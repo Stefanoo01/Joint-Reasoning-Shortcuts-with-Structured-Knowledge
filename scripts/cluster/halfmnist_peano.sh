@@ -10,8 +10,5 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 
-# Activate conda environment
-source activate join-reasoning
-
 # Run the script
-python -m experiments.run_halfmnist_peano --epochs 30
+python -m experiments.run_halfmnist_peano --preset peano_medium_v1

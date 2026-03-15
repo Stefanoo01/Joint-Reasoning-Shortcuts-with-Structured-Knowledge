@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sys
 import os
 import random
@@ -17,15 +18,13 @@ RSBENCH_DIR = os.path.abspath(os.path.join(
 if RSBENCH_DIR not in sys.path:
     sys.path.insert(0, RSBENCH_DIR)
 
-# RSBench imports
-from models.mnistcbm import get_parser
-from datasets.halfmnist import HALFMNIST
-from models.mnistcbm import MnistCBM
-
 # Differentiable ILP imports
 from ilp.logic.atoms import Atom
 from ilp.logic.valuation_soft import build_a0_from_indexed_facts
 from configs.half_mnist_addition import make_config
+from configs.half_mnist_presets import format_preset
+from configs.half_mnist_presets import get_preset
+from configs.half_mnist_presets import list_presets
 from ilp.learning.system_builder import build_system_from_config
 from ilp.learning.trainer import linear_anneal
 from ilp.learning.trainer import extract_topk_program
@@ -103,6 +102,12 @@ def print_learned_program(bundle, temperature: float = 0.2, top_k: int = 5) -> N
             print(f"  #{rank}: (j={j}, k={k}) prob={prob:.3f}")
             print("    C1:", c1_texts[j])
             print("    C2:", c2_texts[k])
+
+
+def print_available_presets(experiment: str) -> None:
+    print(f"Available HalfMNIST presets for '{experiment}':")
+    for preset in list_presets(experiment):
+        print(" ", format_preset(preset))
 
 @torch.no_grad()
 def evaluate(
@@ -208,8 +213,31 @@ def evaluate(
 
 
 def main():
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument("--preset", type=str, default="add_medium_v1")
+    bootstrap.add_argument("--list_presets", action="store_true")
+    bootstrap_args, _ = bootstrap.parse_known_args()
+
+    if bootstrap_args.list_presets:
+        print_available_presets("addition")
+        return
+
+    preset = get_preset(bootstrap_args.preset)
+    if preset.experiment != "addition":
+        raise ValueError(f"Preset '{preset.name}' is for '{preset.experiment}', not 'addition'")
+
+    # RSBench imports
+    from models.mnistcbm import get_parser
+    from datasets.halfmnist import HALFMNIST
+    from models.mnistcbm import MnistCBM
+
     parser = get_parser()
-    
+    parser.add_argument("--preset", type=str, default=preset.name)
+    parser.add_argument("--list_presets", action="store_true")
+    parser.add_argument("--config_variant", type=str, default=preset.config_variant)
+    parser.add_argument("--config_mode", type=str, choices=["tight", "medium"], default=preset.config_mode)
+    parser.add_argument("--reasoning_steps", type=int, default=preset.reasoning_steps)
+
     # Custom overrides for this specific script
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--lambda_mode", type=str, choices=["fixed", "schedule"], default="fixed")
@@ -218,14 +246,46 @@ def main():
     parser.add_argument("--lam2", type=float, default=0.0)
     parser.add_argument("--ilp_chunk_size", type=int, default=16)
 
+    parser.set_defaults(
+        preset=preset.name,
+        config_variant=preset.config_variant,
+        config_mode=preset.config_mode,
+        reasoning_steps=preset.reasoning_steps,
+        epochs=preset.epochs,
+        batch_size=preset.batch_size,
+        ilp_chunk_size=preset.ilp_chunk_size,
+        lambda_mode=preset.lambda_mode,
+        lam0=preset.lam0,
+        lam1=preset.lam1,
+        lam2=preset.lam2,
+    )
+
     # We will pretend the user passed reasonable defaults for RSBench internally
     args, unknown = parser.parse_known_args()
+
+    if args.list_presets:
+        print_available_presets("addition")
+        return
+
+    selected_preset = get_preset(args.preset)
+    if selected_preset.experiment != "addition":
+        raise ValueError(f"Preset '{selected_preset.name}' is for '{selected_preset.experiment}', not 'addition'")
     
     # Force RSBench args to valid choices for HALFMNIST
     args.dataset = "halfmnist"
     args.task = "addition"
     if not hasattr(args, "c_sup") or args.c_sup == 0:
         args.c_sup = 1.0
+
+    print("Using HalfMNIST preset:")
+    print(" ", format_preset(selected_preset))
+    print(
+        "Resolved run settings | "
+        f"variant={args.config_variant} | mode={args.config_mode} | T={args.reasoning_steps} | "
+        f"epochs={args.epochs} | "
+        f"batch_size={args.batch_size} | ilp_chunk_size={args.ilp_chunk_size} | "
+        f"lambda_mode={args.lambda_mode} | lam=({args.lam0}, {args.lam1}, {args.lam2})"
+    )
 
     random.seed(args.seed or 123)
     torch.manual_seed(args.seed or 123)
@@ -244,7 +304,11 @@ def main():
     cbm = MnistCBM(encoder=encoder, n_images=2, args=args, n_facts=5, nr_classes=9).to(device)
 
     # 3. Build ILP
-    cfg = make_config()
+    cfg = make_config(
+        mode=args.config_mode,
+        T=args.reasoning_steps,
+        variant=args.config_variant,
+    )
     bundle = build_system_from_config(cfg)
     learner = bundle.learner.to(device)
 
