@@ -20,6 +20,7 @@ env/
 # Logs and databases
 *.log
 *.sqlite3
+logs/
 
 # Byte-compiled / optimized / DLL files
 *.pyc

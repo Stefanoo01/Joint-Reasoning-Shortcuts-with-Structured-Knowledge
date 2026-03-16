@@ -66,8 +66,25 @@ def _make_addition_variant_spec(variant: str) -> _AdditionVariantSpec:
                 ("tmp", 2): {"digit1", "digit2", "add"},
                 ("sum_is", 1): {"digit1", "digit2", "tmp", "add"},
             },
-            tmp_filter_kind="none",
-            sum_filter_kind="none",
+            tmp_filter_kind="broad_structured",
+            sum_filter_kind="broad_structured",
+            add_extra_tmp2=False,
+            tmp2_filter_kind=None,
+            require_recursive_on_C2={
+                ("sum_is", 1): False,
+                ("tmp", 2): False,
+            },
+        )
+
+    if variant == "sum_relaxed":
+        return _AdditionVariantSpec(
+            name="sum_relaxed",
+            allowed_body_preds={
+                ("tmp", 2): {"digit2", "add"},
+                ("sum_is", 1): {"digit1", "digit2", "tmp"},
+            },
+            tmp_filter_kind="mode",
+            sum_filter_kind="sum_relaxed",
             add_extra_tmp2=False,
             tmp2_filter_kind=None,
             require_recursive_on_C2={
@@ -97,7 +114,7 @@ def _make_addition_variant_spec(variant: str) -> _AdditionVariantSpec:
 
     raise ValueError(
         "Unsupported HalfMNIST addition variant: "
-        f"{variant}. Known variants: base, canonical_only, broad_search, extra_tmp2"
+        f"{variant}. Known variants: base, canonical_only, broad_search, sum_relaxed, extra_tmp2"
     )
 
 
@@ -183,8 +200,15 @@ def make_config(mode: str = "medium", T: int = 2, variant: str = "base") -> Task
         digit_atom = b1 if b1.pred in {"digit1", "digit2"} else b2
         add_atom   = b2 if digit_atom is b1 else b1
 
-        (z0,) = digit_atom.args
-        if not isinstance(z0, Var) or z0.name != "Z0":
+        (digit_var,) = digit_atom.args
+        if not isinstance(digit_var, Var):
+            return False
+
+        if filter_kind == "broad_structured":
+            return digit_var in add_atom.args
+
+        z0 = digit_var
+        if z0.name != "Z0":
             return False
 
         if filter_kind == "canonical_only":
@@ -220,6 +244,40 @@ def make_config(mode: str = "medium", T: int = 2, variant: str = "base") -> Task
 
         b1, b2 = c.body
         preds = {b1.pred, b2.pred}
+        if variant_spec.sum_filter_kind == "broad_structured":
+            allowed_pred_pairs = {
+                frozenset({"digit1", "tmp"}),
+                frozenset({"digit2", "tmp"}),
+                frozenset({"digit1", "add"}),
+                frozenset({"digit2", "add"}),
+            }
+            if frozenset(preds) not in allowed_pred_pairs:
+                return False
+
+            (head_x,) = c.head.args
+            digit_atom = b1 if b1.pred in {"digit1", "digit2"} else b2
+            rel_atom = b2 if digit_atom is b1 else b1
+
+            (digit_var,) = digit_atom.args
+            if not isinstance(digit_var, Var):
+                return False
+
+            return digit_var in rel_atom.args and head_x in rel_atom.args
+
+        if variant_spec.sum_filter_kind == "sum_relaxed":
+            if preds not in ({"digit1", "tmp"}, {"digit2", "tmp"}):
+                return False
+
+            (head_x,) = c.head.args
+            digit_atom = b1 if b1.pred in {"digit1", "digit2"} else b2
+            tmp_atom = b2 if digit_atom is b1 else b1
+
+            (digit_var,) = digit_atom.args
+            if not isinstance(digit_var, Var):
+                return False
+
+            return digit_var in tmp_atom.args and head_x in tmp_atom.args
+
         if preds != {"digit1", "tmp"}:
             if variant_spec.add_extra_tmp2 and preds == {"digit1", "tmp2"}:
                 pass
