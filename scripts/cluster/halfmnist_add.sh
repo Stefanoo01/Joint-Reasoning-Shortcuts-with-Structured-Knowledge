@@ -11,4 +11,4 @@
 #SBATCH --cpus-per-task=8
 
 # Run the script
-python -m experiments.run_halfmnist_supervised --preset add_medium_v1
+python -m experiments.run_halfmnist_supervised --preset add_extra_tmp2_v1 --epochs 30

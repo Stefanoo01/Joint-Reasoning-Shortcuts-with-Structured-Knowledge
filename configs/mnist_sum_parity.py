@@ -7,7 +7,12 @@ from ilp.logic.clauses import Clause, Var
 from ilp.logic.templates import RuleTemplate
 
 
-def make_config(mode: str = "tight", T: int = 3, variant: str = "base") -> TaskConfig:
+def make_config(
+    mode: str = "tight",
+    T: int = 3,
+    variant: str = "base",
+    n_digits: int = 10,
+) -> TaskConfig:
     """
     ILP config for the biased MNIST-SumParity task.
 
@@ -19,14 +24,16 @@ def make_config(mode: str = "tight", T: int = 3, variant: str = "base") -> TaskC
         raise ValueError(f"Unsupported MNIST-SumParity mode: {mode}")
     if T <= 0:
         raise ValueError("T must be > 0")
+    if n_digits <= 1:
+        raise ValueError("n_digits must be > 1")
     if variant != "base":
         raise ValueError(
             "Unsupported MNIST-SumParity variant: "
             f"{variant}. Known variants: base"
         )
 
-    digits = [str(d) for d in range(10)]
-    sums = [str(s) for s in range(19)]
+    digits = [str(d) for d in range(n_digits)]
+    sums = [str(s) for s in range((2 * n_digits) - 1)]
     parities = ["even", "odd"]
     constants = list(dict.fromkeys(digits + sums + parities))
 

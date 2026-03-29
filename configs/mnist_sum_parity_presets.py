@@ -15,6 +15,7 @@ class MnistSumParityPreset:
     experiment: MnistSumParityExperiment
     config_variant: str
     config_mode: MnistSumParityMode
+    n_digits: int
     reasoning_steps: int
     epochs: int
     batch_size: int
@@ -32,6 +33,7 @@ MNIST_SUM_PARITY_PRESETS: Dict[str, MnistSumParityPreset] = {
         experiment="sum_parity",
         config_variant="base",
         config_mode="tight",
+        n_digits=10,
         reasoning_steps=3,
         epochs=30,
         batch_size=64,
@@ -47,6 +49,7 @@ MNIST_SUM_PARITY_PRESETS: Dict[str, MnistSumParityPreset] = {
         experiment="sum_parity",
         config_variant="base",
         config_mode="tight",
+        n_digits=10,
         reasoning_steps=3,
         epochs=30,
         batch_size=128,
@@ -62,6 +65,7 @@ MNIST_SUM_PARITY_PRESETS: Dict[str, MnistSumParityPreset] = {
         experiment="sum_parity",
         config_variant="base",
         config_mode="medium",
+        n_digits=10,
         reasoning_steps=3,
         epochs=30,
         batch_size=64,
@@ -77,6 +81,7 @@ MNIST_SUM_PARITY_PRESETS: Dict[str, MnistSumParityPreset] = {
         experiment="sum_parity",
         config_variant="base",
         config_mode="medium",
+        n_digits=10,
         reasoning_steps=3,
         epochs=30,
         batch_size=128,
@@ -86,6 +91,38 @@ MNIST_SUM_PARITY_PRESETS: Dict[str, MnistSumParityPreset] = {
         lam1=0.2,
         lam2=0.0,
         notes="Medium biased MNIST-SumParity preset with larger batch and ILP chunks for faster GPU throughput.",
+    ),
+    "biased_tight_0to5_v1": MnistSumParityPreset(
+        name="biased_tight_0to5_v1",
+        experiment="sum_parity",
+        config_variant="base",
+        config_mode="tight",
+        n_digits=6,
+        reasoning_steps=3,
+        epochs=30,
+        batch_size=128,
+        ilp_chunk_size=32,
+        lambda_mode="fixed",
+        lam0=1.0,
+        lam1=0.2,
+        lam2=0.0,
+        notes="Reduced biased MNIST-SumParity over digits 0..5 with larger GPU-friendly batch and ILP chunks.",
+    ),
+    "biased_medium_0to5_v1": MnistSumParityPreset(
+        name="biased_medium_0to5_v1",
+        experiment="sum_parity",
+        config_variant="base",
+        config_mode="medium",
+        n_digits=6,
+        reasoning_steps=3,
+        epochs=30,
+        batch_size=128,
+        ilp_chunk_size=32,
+        lambda_mode="fixed",
+        lam0=1.0,
+        lam1=0.2,
+        lam2=0.0,
+        notes="Reduced biased MNIST-SumParity over digits 0..5 with the wider medium clause search.",
     ),
 }
 
@@ -112,7 +149,7 @@ def list_presets(
 def format_preset(preset: MnistSumParityPreset) -> str:
     return (
         f"{preset.name} | experiment={preset.experiment} | variant={preset.config_variant} | "
-        f"mode={preset.config_mode} | "
+        f"mode={preset.config_mode} | n_digits={preset.n_digits} | "
         f"T={preset.reasoning_steps} | epochs={preset.epochs} | batch_size={preset.batch_size} | "
         f"ilp_chunk_size={preset.ilp_chunk_size} | lambda_mode={preset.lambda_mode} | "
         f"lam=({preset.lam0}, {preset.lam1}, {preset.lam2}) | notes={preset.notes}"

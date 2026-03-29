@@ -25,20 +25,20 @@ from ilp.logic.atoms import Atom
 from ilp.logic.valuation_soft import build_a0_from_indexed_facts
 
 
-def build_hard_idx(atom_to_idx) -> torch.Tensor:
+def build_hard_idx(atom_to_idx, n_digits: int) -> torch.Tensor:
     hard_atoms = []
-    for a in range(10):
-        for b in range(10):
+    for a in range(n_digits):
+        for b in range(n_digits):
             hard_atoms.append(Atom("add", (str(a), str(b), str(a + b))))
-    for s in range(19):
+    for s in range((2 * n_digits) - 1):
         parity = "odd" if s % 2 else "even"
         hard_atoms.append(Atom("parity_of", (str(s), parity)))
     return torch.tensor([atom_to_idx[a] for a in hard_atoms], dtype=torch.long)
 
 
-def build_digit12_soft_idx(atom_to_idx) -> torch.Tensor:
-    atoms = [Atom("digit1", (str(d),)) for d in range(10)]
-    atoms.extend(Atom("digit2", (str(d),)) for d in range(10))
+def build_digit12_soft_idx(atom_to_idx, n_digits: int) -> torch.Tensor:
+    atoms = [Atom("digit1", (str(d),)) for d in range(n_digits)]
+    atoms.extend(Atom("digit2", (str(d),)) for d in range(n_digits))
     return torch.tensor([atom_to_idx[a] for a in atoms], dtype=torch.long)
 
 
@@ -214,6 +214,7 @@ def main():
     parser.add_argument(
         "--config_mode", type=str, choices=["tight", "medium"], default=preset.config_mode
     )
+    parser.add_argument("--n_digits", type=int, default=preset.n_digits)
     parser.add_argument("--reasoning_steps", type=int, default=preset.reasoning_steps)
 
     parser.add_argument("--epochs", type=int, default=30)
@@ -229,6 +230,7 @@ def main():
         preset=preset.name,
         config_variant=preset.config_variant,
         config_mode=preset.config_mode,
+        n_digits=preset.n_digits,
         reasoning_steps=preset.reasoning_steps,
         epochs=preset.epochs,
         batch_size=preset.batch_size,
@@ -260,7 +262,8 @@ def main():
     print(" ", format_preset(selected_preset))
     print(
         "Resolved run settings | "
-        f"variant={args.config_variant} | mode={args.config_mode} | T={args.reasoning_steps} | "
+        f"variant={args.config_variant} | mode={args.config_mode} | n_digits={args.n_digits} | "
+        f"T={args.reasoning_steps} | "
         f"epochs={args.epochs} | "
         f"batch_size={args.batch_size} | ilp_chunk_size={args.ilp_chunk_size} | "
         f"lambda_mode={args.lambda_mode} | lam=({args.lam0}, {args.lam1}, {args.lam2})"
@@ -280,7 +283,7 @@ def main():
         encoder=encoder,
         n_images=2,
         args=args,
-        n_facts=10,
+        n_facts=args.n_digits,
         nr_classes=2,
     ).to(device)
 
@@ -288,6 +291,7 @@ def main():
         mode=args.config_mode,
         T=args.reasoning_steps,
         variant=args.config_variant,
+        n_digits=args.n_digits,
     )
     bundle = build_system_from_config(cfg)
     learner = bundle.learner.to(device)
@@ -296,15 +300,15 @@ def main():
     bot_idx = bundle.bot_idx
     atom_to_idx = bundle.atom_to_idx
 
-    hard_idx = build_hard_idx(atom_to_idx).to(device)
-    soft_idx_digit = build_digit12_soft_idx(atom_to_idx).to(device)
+    hard_idx = build_hard_idx(atom_to_idx, args.n_digits).to(device)
+    soft_idx_digit = build_digit12_soft_idx(atom_to_idx, args.n_digits).to(device)
     sum_parity_idx = build_sum_parity_idx(atom_to_idx).to(device)
 
     opt = torch.optim.Adam(list(cbm.parameters()) + list(learner.parameters()), lr=1e-3)
 
     def lambda_for_epoch(ep: int) -> float:
         if args.lambda_mode == "fixed":
-            return args.lam0
+            return args.lam2
         if ep == 0:
             return args.lam0
         if ep == 1:
