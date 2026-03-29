@@ -128,9 +128,52 @@ def test_mnist_even_odd_presets_drive_parametric_configs():
         tight_bundle.clause_texts[("sum_is", 1)][0]
     )
 
+    broad_preset = get_mnist_even_odd_preset("add_broad_search_v1")
+    broad_cfg = make_mnist_even_odd_addition(
+        variant=broad_preset.config_variant,
+        mode=broad_preset.config_mode,
+        T=broad_preset.reasoning_steps,
+    )
+    assert "digit1" in broad_cfg.bias.allowed_body_preds[("tmp", 2)]
+    assert "add" in broad_cfg.bias.allowed_body_preds[("sum_is", 1)]
+    broad_bundle = build_system_from_config(broad_cfg)
+    assert len(broad_bundle.clause_texts[("tmp", 2)][0]) > len(
+        medium_bundle.clause_texts[("tmp", 2)][0]
+    )
+    assert len(broad_bundle.clause_texts[("sum_is", 1)][0]) > len(
+        medium_bundle.clause_texts[("sum_is", 1)][0]
+    )
+
+    sum_relaxed_preset = get_mnist_even_odd_preset("add_sum_relaxed_v1")
+    sum_relaxed_cfg = make_mnist_even_odd_addition(
+        variant=sum_relaxed_preset.config_variant,
+        mode=sum_relaxed_preset.config_mode,
+        T=sum_relaxed_preset.reasoning_steps,
+    )
+    sum_relaxed_bundle = build_system_from_config(sum_relaxed_cfg)
+    assert len(sum_relaxed_bundle.clause_texts[("tmp", 2)][0]) == len(
+        medium_bundle.clause_texts[("tmp", 2)][0]
+    )
+    assert len(sum_relaxed_bundle.clause_texts[("sum_is", 1)][0]) > len(
+        medium_bundle.clause_texts[("sum_is", 1)][0]
+    )
+
+    extra_tmp2_preset = get_mnist_even_odd_preset("add_extra_tmp2_v1")
+    extra_tmp2_cfg = make_mnist_even_odd_addition(
+        variant=extra_tmp2_preset.config_variant,
+        mode=extra_tmp2_preset.config_mode,
+        T=extra_tmp2_preset.reasoning_steps,
+    )
+    assert ("tmp2", 2) in extra_tmp2_cfg.aux_keys
+    assert ("tmp2", 2) in extra_tmp2_cfg.templates
+    assert "tmp2" in extra_tmp2_cfg.bias.allowed_body_preds[("sum_is", 1)]
+
     addition_names = {preset.name for preset in list_mnist_even_odd_presets("addition")}
     assert "add_medium_v1" in addition_names
     assert "add_tight_v1" in addition_names
+    assert "add_broad_search_v1" in addition_names
+    assert "add_sum_relaxed_v1" in addition_names
+    assert "add_extra_tmp2_v1" in addition_names
 
 
 if __name__ == "__main__":
