@@ -46,6 +46,13 @@ def test_mnist_sum_parity_presets_drive_parametric_configs():
         T=medium_preset.reasoning_steps,
         n_digits=medium_preset.n_digits,
     )
+    broad_preset = get_preset("biased_broad_search_v1")
+    broad_cfg = make_config(
+        variant=broad_preset.config_variant,
+        mode=broad_preset.config_mode,
+        T=broad_preset.reasoning_steps,
+        n_digits=broad_preset.n_digits,
+    )
     tight_v2_preset = get_preset("biased_tight_v2")
     medium_v2_preset = get_preset("biased_medium_v2")
     tight_0to5_preset = get_preset("biased_tight_0to5_v1")
@@ -55,10 +62,27 @@ def test_mnist_sum_parity_presets_drive_parametric_configs():
         T=tight_0to5_preset.reasoning_steps,
         n_digits=tight_0to5_preset.n_digits,
     )
+    broad_0to5_preset = get_preset("biased_broad_search_0to5_v1")
+    broad_0to5_cfg = make_config(
+        variant=broad_0to5_preset.config_variant,
+        mode=broad_0to5_preset.config_mode,
+        T=broad_0to5_preset.reasoning_steps,
+        n_digits=broad_0to5_preset.n_digits,
+    )
+    tmp_broad_only_0to5_preset = get_preset("biased_tmp_broad_only_0to5_v1")
+    tmp_broad_only_0to5_cfg = make_config(
+        variant=tmp_broad_only_0to5_preset.config_variant,
+        mode=tmp_broad_only_0to5_preset.config_mode,
+        T=tmp_broad_only_0to5_preset.reasoning_steps,
+        n_digits=tmp_broad_only_0to5_preset.n_digits,
+    )
 
     tight_bundle = build_system_from_config(tight_cfg)
     medium_bundle = build_system_from_config(medium_cfg)
+    broad_bundle = build_system_from_config(broad_cfg)
     tight_0to5_bundle = build_system_from_config(tight_0to5_cfg)
+    tmp_broad_only_0to5_bundle = build_system_from_config(tmp_broad_only_0to5_cfg)
+    broad_0to5_bundle = build_system_from_config(broad_0to5_cfg)
 
     assert tight_cfg.target_key == ("sum_parity", 1)
     assert ("sum_is", 1) in tight_cfg.aux_keys
@@ -74,10 +98,37 @@ def test_mnist_sum_parity_presets_drive_parametric_configs():
     assert medium_v2_preset.batch_size > medium_preset.batch_size
     assert medium_v2_preset.ilp_chunk_size > medium_preset.ilp_chunk_size
     assert tight_0to5_preset.n_digits == 6
+    assert tmp_broad_only_0to5_preset.config_variant == "tmp_broad_only"
+    assert broad_preset.config_variant == "broad_search"
+    assert broad_0to5_preset.config_variant == "broad_search"
     assert len(tight_0to5_bundle.G) < len(tight_bundle.G)
     assert default_dataset_dimensions(6)["train"] < default_dataset_dimensions(10)["train"]
     assert len(medium_bundle.clause_texts[("tmp", 2)][0]) > len(
         tight_bundle.clause_texts[("tmp", 2)][0]
+    )
+    assert len(broad_bundle.clause_texts[("tmp", 2)][0]) > len(
+        medium_bundle.clause_texts[("tmp", 2)][0]
+    )
+    assert len(broad_bundle.clause_texts[("sum_is", 1)][0]) > len(
+        medium_bundle.clause_texts[("sum_is", 1)][0]
+    )
+    assert len(broad_bundle.clause_texts[("sum_parity", 1)][0]) > len(
+        medium_bundle.clause_texts[("sum_parity", 1)][0]
+    )
+    assert len(broad_0to5_bundle.clause_texts[("sum_parity", 1)][0]) > len(
+        tight_0to5_bundle.clause_texts[("sum_parity", 1)][0]
+    )
+    assert len(tmp_broad_only_0to5_bundle.clause_texts[("tmp", 2)][0]) > len(
+        tight_0to5_bundle.clause_texts[("tmp", 2)][0]
+    )
+    assert len(tmp_broad_only_0to5_bundle.clause_texts[("tmp", 2)][0]) == len(
+        broad_0to5_bundle.clause_texts[("tmp", 2)][0]
+    )
+    assert len(tmp_broad_only_0to5_bundle.clause_texts[("sum_is", 1)][0]) == len(
+        tight_0to5_bundle.clause_texts[("sum_is", 1)][0]
+    )
+    assert len(tmp_broad_only_0to5_bundle.clause_texts[("sum_parity", 1)][0]) == len(
+        tight_0to5_bundle.clause_texts[("sum_parity", 1)][0]
     )
 
     preset_names = {preset.name for preset in list_presets("sum_parity")}
@@ -85,8 +136,11 @@ def test_mnist_sum_parity_presets_drive_parametric_configs():
     assert "biased_tight_v2" in preset_names
     assert "biased_medium_v1" in preset_names
     assert "biased_medium_v2" in preset_names
+    assert "biased_broad_search_v1" in preset_names
     assert "biased_tight_0to5_v1" in preset_names
     assert "biased_medium_0to5_v1" in preset_names
+    assert "biased_tmp_broad_only_0to5_v1" in preset_names
+    assert "biased_broad_search_0to5_v1" in preset_names
 
 
 def test_sum_parity_labels_and_masks_match_biased_split():

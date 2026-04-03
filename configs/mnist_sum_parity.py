@@ -1,10 +1,68 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ilp.learning.bias import BiasConfig
+from ilp.learning.data import PredicateKey
 from ilp.learning.task_config import TaskConfig
 from ilp.logic.atoms import Predicate
 from ilp.logic.clauses import Clause, Var
 from ilp.logic.templates import RuleTemplate
+
+
+@dataclass(frozen=True)
+class _SumParityVariantSpec:
+    name: str
+    allowed_body_preds: dict[PredicateKey, set[str]]
+    tmp_filter_kind: str
+    sum_filter_kind: str
+    parity_filter_kind: str
+
+
+def _make_sum_parity_variant_spec(variant: str) -> _SumParityVariantSpec:
+    if variant == "base":
+        return _SumParityVariantSpec(
+            name="base",
+            allowed_body_preds={
+                ("tmp", 2): {"digit2", "add"},
+                ("sum_is", 1): {"digit1", "tmp"},
+                ("sum_parity", 1): {"sum_is", "parity_of"},
+            },
+            tmp_filter_kind="mode",
+            sum_filter_kind="mode",
+            parity_filter_kind="mode",
+        )
+
+    if variant == "tmp_broad_only":
+        return _SumParityVariantSpec(
+            name="tmp_broad_only",
+            allowed_body_preds={
+                ("tmp", 2): {"digit1", "digit2", "add"},
+                ("sum_is", 1): {"digit1", "tmp"},
+                ("sum_parity", 1): {"sum_is", "parity_of"},
+            },
+            tmp_filter_kind="broad_structured",
+            sum_filter_kind="mode",
+            parity_filter_kind="mode",
+        )
+
+    if variant == "broad_search":
+        return _SumParityVariantSpec(
+            name="broad_search",
+            allowed_body_preds={
+                ("tmp", 2): {"digit1", "digit2", "add"},
+                ("sum_is", 1): {"digit1", "digit2", "tmp", "add"},
+                ("sum_parity", 1): {"tmp", "sum_is", "parity_of"},
+            },
+            tmp_filter_kind="broad_structured",
+            sum_filter_kind="broad_structured",
+            parity_filter_kind="broad_structured",
+        )
+
+    raise ValueError(
+        "Unsupported MNIST-SumParity variant: "
+        f"{variant}. Known variants: base, tmp_broad_only, broad_search"
+    )
 
 
 def make_config(
@@ -26,11 +84,9 @@ def make_config(
         raise ValueError("T must be > 0")
     if n_digits <= 1:
         raise ValueError("n_digits must be > 1")
-    if variant != "base":
-        raise ValueError(
-            "Unsupported MNIST-SumParity variant: "
-            f"{variant}. Known variants: base"
-        )
+
+    mode_name = mode
+    variant_spec = _make_sum_parity_variant_spec(variant)
 
     digits = [str(d) for d in range(n_digits)]
     sums = [str(s) for s in range((2 * n_digits) - 1)]
@@ -69,6 +125,26 @@ def make_config(
 
     def tmp_mode_filter(c: Clause) -> bool:
         b1, b2 = c.body
+        if variant_spec.tmp_filter_kind == "broad_structured":
+            preds = {b1.pred, b2.pred}
+            if "add" not in preds:
+                return False
+
+            digit_preds = preds.intersection({"digit1", "digit2"})
+            if len(digit_preds) != 1:
+                return False
+
+            head_sum, head_digit = c.head.args
+            digit_atom = b1 if b1.pred in {"digit1", "digit2"} else b2
+            add_atom = b2 if digit_atom is b1 else b1
+
+            (digit_var,) = digit_atom.args
+            if not isinstance(digit_var, Var):
+                return False
+
+            add_args = set(add_atom.args)
+            return head_sum in add_args and head_digit in add_args and digit_var in add_args
+
         preds = {b1.pred, b2.pred}
         if preds != {"digit2", "add"}:
             return False
@@ -81,7 +157,7 @@ def make_config(
         if not isinstance(z0, Var) or z0.name != "Z0":
             return False
 
-        if mode == "tight":
+        if mode_name == "tight":
             allowed_add_args = {
                 (head_digit, z0, head_sum),
                 (z0, head_digit, head_sum),
@@ -100,6 +176,28 @@ def make_config(
 
     def sum_mode_filter(c: Clause) -> bool:
         b1, b2 = c.body
+        if variant_spec.sum_filter_kind == "broad_structured":
+            preds = {b1.pred, b2.pred}
+            allowed_pred_pairs = {
+                frozenset({"digit1", "tmp"}),
+                frozenset({"digit2", "tmp"}),
+                frozenset({"digit1", "add"}),
+                frozenset({"digit2", "add"}),
+            }
+            if frozenset(preds) not in allowed_pred_pairs:
+                return False
+
+            (head_sum,) = c.head.args
+            digit_atom = b1 if b1.pred in {"digit1", "digit2"} else b2
+            rel_atom = b2 if digit_atom is b1 else b1
+
+            (digit_var,) = digit_atom.args
+            if not isinstance(digit_var, Var):
+                return False
+
+            rel_args = set(rel_atom.args)
+            return head_sum in rel_args and digit_var in rel_args
+
         preds = {b1.pred, b2.pred}
         if preds != {"digit1", "tmp"}:
             return False
@@ -116,6 +214,29 @@ def make_config(
 
     def parity_mode_filter(c: Clause) -> bool:
         b1, b2 = c.body
+        if variant_spec.parity_filter_kind == "broad_structured":
+            preds = {b1.pred, b2.pred}
+            allowed_pred_pairs = {
+                frozenset({"sum_is", "parity_of"}),
+                frozenset({"tmp", "parity_of"}),
+            }
+            if frozenset(preds) not in allowed_pred_pairs:
+                return False
+
+            (head_parity,) = c.head.args
+            rel_atom = b1 if b1.pred != "parity_of" else b2
+            parity_atom = b2 if rel_atom is b1 else b1
+
+            if head_parity not in parity_atom.args:
+                return False
+
+            shared_vars = {
+                arg
+                for arg in rel_atom.args
+                if isinstance(arg, Var) and arg in parity_atom.args
+            }
+            return len(shared_vars) > 0
+
         preds = {b1.pred, b2.pred}
         if preds != {"sum_is", "parity_of"}:
             return False
@@ -131,11 +252,7 @@ def make_config(
         return parity_atom.args == (z0, head_parity)
 
     bias = BiasConfig(
-        allowed_body_preds={
-            ("tmp", 2): {"digit2", "add"},
-            ("sum_is", 1): {"digit1", "tmp"},
-            ("sum_parity", 1): {"sum_is", "parity_of"},
-        },
+        allowed_body_preds=variant_spec.allowed_body_preds,
         require_recursive={},
         require_body_connected=True,
         custom_clause_filters={

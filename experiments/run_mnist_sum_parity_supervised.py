@@ -76,13 +76,36 @@ def infer_ilp_in_chunks(
 
 
 def compute_task_loss(
-    scores: torch.Tensor, targets: torch.Tensor, eps: float = 1e-6
+    scores: torch.Tensor,
+    targets: torch.Tensor,
+    class_weights: torch.Tensor | None = None,
+    eps: float = 1e-6,
 ) -> torch.Tensor:
+    if scores.size(1) != 2:
+        raise ValueError("compute_task_loss currently expects exactly 2 parity classes")
+
     pos = scores.gather(1, targets.unsqueeze(1)).clamp(eps, 1 - eps)
     neg_mask = torch.ones_like(scores, dtype=torch.bool)
     neg_mask.scatter_(1, targets.unsqueeze(1), False)
     neg = scores[neg_mask].view(scores.size(0), -1).clamp(eps, 1 - eps)
-    return -(pos.log()).mean() - ((1.0 - neg).log()).mean()
+
+    if class_weights is None:
+        pos_weights = torch.ones_like(pos)
+        neg_weights = torch.ones_like(neg)
+    else:
+        pos_weights = class_weights[targets].unsqueeze(1)
+        neg_targets = 1 - targets
+        neg_weights = class_weights[neg_targets].unsqueeze(1)
+
+    pos_loss = -(pos_weights * pos.log()).mean()
+    neg_loss = -(neg_weights * (1.0 - neg).log()).mean()
+    return pos_loss + neg_loss
+
+
+def build_parity_class_weights(targets, device: torch.device) -> torch.Tensor:
+    counts = torch.bincount(torch.as_tensor(targets, dtype=torch.long), minlength=2).float()
+    weights = counts.sum() / (counts.clamp_min(1.0) * counts.numel())
+    return weights.to(device)
 
 
 def print_available_presets() -> None:
@@ -105,6 +128,46 @@ def print_learned_program(bundle, temperature: float = 0.2, top_k: int = 5) -> N
             print("    C2:", c2_texts[k])
 
 
+def print_digit_pair_mappings(
+    *,
+    pair_counts,
+    pair_totals,
+    split_name: str,
+    max_rows: int = 40,
+) -> None:
+    if not pair_totals:
+        return
+
+    print(f"\n--- Learned Digit Pair Mappings ({split_name}) ---")
+    rows_printed = 0
+    for true_pair in sorted(pair_totals):
+        total = pair_totals[true_pair]
+        ranked = sorted(
+            (
+                (pred_pair, count)
+                for (tp, pred_pair), count in pair_counts.items()
+                if tp == true_pair
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        if not ranked:
+            continue
+
+        pred_pair, count = ranked[0]
+        ratio = count / total
+        print(
+            f"True digits {true_pair} -> Pred digits {pred_pair} "
+            f"[{count}/{total} | {ratio:.1%}]"
+        )
+        rows_printed += 1
+        if rows_printed >= max_rows:
+            remaining = len(pair_totals) - rows_printed
+            if remaining > 0:
+                print(f"... {remaining} more true-digit mappings omitted")
+            break
+    print("---------------------------------------------")
+
+
 @torch.no_grad()
 def evaluate(
     *,
@@ -119,6 +182,9 @@ def evaluate(
     hard_idx: torch.Tensor,
     sum_parity_idx: torch.Tensor,
     ilp_chunk_size: int,
+    class_weights: torch.Tensor,
+    split_name: str | None = None,
+    print_mappings: bool = False,
 ) -> dict:
     cbm.eval()
     learner.eval()
@@ -130,6 +196,11 @@ def evaluate(
     correct_parity_ilp = 0
     loss_task_sum = 0.0
     loss_concepts_sum = 0.0
+
+    from collections import Counter
+
+    pair_counts = Counter()
+    pair_totals = Counter()
 
     for imgs, targets, concepts in loader:
         batch_size = imgs.size(0)
@@ -148,6 +219,12 @@ def evaluate(
         d2_hat = torch.argmax(logits2, dim=1)
         correct_d1 += int(((d1_hat == d1_true_t) & (d1_true_t != -1)).sum().item())
         correct_d2 += int(((d2_hat == d2_true_t) & (d2_true_t != -1)).sum().item())
+
+        for i in range(batch_size):
+            true_pair = (int(d1_true_t[i]), int(d2_true_t[i]))
+            pred_pair = (int(d1_hat[i]), int(d2_hat[i]))
+            pair_counts[(true_pair, pred_pair)] += 1
+            pair_totals[true_pair] += 1
 
         loss_concepts = (
             F.cross_entropy(logits1, d1_true_t, ignore_index=-1)
@@ -175,9 +252,18 @@ def evaluate(
 
         parity_hat_ilp = torch.argmax(scores, dim=1)
         correct_parity_ilp += int(parity_hat_ilp.eq(y_true_t).sum().item())
-        loss_task_sum += float(compute_task_loss(scores, y_true_t).item()) * batch_size
+        loss_task_sum += float(
+            compute_task_loss(scores, y_true_t, class_weights=class_weights).item()
+        ) * batch_size
 
         total += batch_size
+
+    if print_mappings:
+        print_digit_pair_mappings(
+            pair_counts=pair_counts,
+            pair_totals=pair_totals,
+            split_name=split_name or "eval",
+        )
 
     return {
         "loss_task": loss_task_sum / total,
@@ -218,6 +304,8 @@ def main():
     parser.add_argument("--reasoning_steps", type=int, default=preset.reasoning_steps)
 
     parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--balanced_sampler", action="store_true")
+    parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument(
         "--lambda_mode", type=str, choices=["fixed", "schedule"], default="fixed"
     )
@@ -266,6 +354,7 @@ def main():
         f"T={args.reasoning_steps} | "
         f"epochs={args.epochs} | "
         f"batch_size={args.batch_size} | ilp_chunk_size={args.ilp_chunk_size} | "
+        f"lr={args.lr} | balanced_sampler={args.balanced_sampler} | num_workers={args.num_workers} | "
         f"lambda_mode={args.lambda_mode} | lam=({args.lam0}, {args.lam1}, {args.lam2})"
     )
 
@@ -303,8 +392,12 @@ def main():
     hard_idx = build_hard_idx(atom_to_idx, args.n_digits).to(device)
     soft_idx_digit = build_digit12_soft_idx(atom_to_idx, args.n_digits).to(device)
     sum_parity_idx = build_sum_parity_idx(atom_to_idx).to(device)
+    class_weights = build_parity_class_weights(dataset.dataset_train.targets, device)
 
-    opt = torch.optim.Adam(list(cbm.parameters()) + list(learner.parameters()), lr=1e-3)
+    opt = torch.optim.Adam(
+        list(cbm.parameters()) + list(learner.parameters()),
+        lr=args.lr,
+    )
 
     def lambda_for_epoch(ep: int) -> float:
         if args.lambda_mode == "fixed":
@@ -354,7 +447,7 @@ def main():
                 ilp_chunk_size=args.ilp_chunk_size,
             )
             scores = aT_batch[:, sum_parity_idx]
-            loss_task = compute_task_loss(scores, y_true_t)
+            loss_task = compute_task_loss(scores, y_true_t, class_weights=class_weights)
             loss = loss_task + lam * loss_concepts
 
             opt.zero_grad()
@@ -374,6 +467,9 @@ def main():
             hard_idx=hard_idx,
             sum_parity_idx=sum_parity_idx,
             ilp_chunk_size=args.ilp_chunk_size,
+            class_weights=class_weights,
+            split_name="val",
+            print_mappings=True,
         )
 
         print(
@@ -397,6 +493,8 @@ def main():
         hard_idx=hard_idx,
         sum_parity_idx=sum_parity_idx,
         ilp_chunk_size=args.ilp_chunk_size,
+        class_weights=class_weights,
+        print_mappings=True,
     )
     ood_metrics = evaluate(
         cbm=cbm,
@@ -410,6 +508,8 @@ def main():
         hard_idx=hard_idx,
         sum_parity_idx=sum_parity_idx,
         ilp_chunk_size=args.ilp_chunk_size,
+        class_weights=class_weights,
+        print_mappings=True,
     )
 
     print("\nFinal evaluation")
