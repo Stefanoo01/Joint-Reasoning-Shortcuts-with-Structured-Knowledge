@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import statistics
 import sys
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
 RSBENCH_DIR = os.path.abspath(
     os.path.join(
@@ -168,6 +170,74 @@ def print_digit_pair_mappings(
     print("---------------------------------------------")
 
 
+def resolve_seed_values(base_seed: int | None, num_seeds: int) -> list[int]:
+    if num_seeds <= 0:
+        raise ValueError("num_seeds must be > 0")
+    seed0 = 123 if base_seed is None else base_seed
+    return [seed0 + offset for offset in range(num_seeds)]
+
+
+def set_global_seed(seed: int) -> None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def build_project_loaders(
+    *,
+    dataset,
+    batch_size: int,
+    num_workers: int,
+) -> tuple[DataLoader, DataLoader, DataLoader]:
+    train_loader = DataLoader(
+        dataset.dataset_test,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        drop_last=False,
+    )
+    val_loader = DataLoader(
+        dataset.dataset_val,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        drop_last=False,
+    )
+    ood_loader = DataLoader(
+        dataset.ood_test,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        drop_last=False,
+    )
+    return train_loader, val_loader, ood_loader
+
+
+def clone_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
+    return {name: value.detach().cpu().clone() for name, value in module.state_dict().items()}
+
+
+def is_better_validation(candidate: dict, best: dict | None) -> bool:
+    if best is None:
+        return True
+    if candidate["acc_parity_ilp"] > best["acc_parity_ilp"]:
+        return True
+    if candidate["acc_parity_ilp"] < best["acc_parity_ilp"]:
+        return False
+    if candidate["loss_task"] < best["loss_task"]:
+        return True
+    if candidate["loss_task"] > best["loss_task"]:
+        return False
+    return candidate["acc_parity_cbm"] > best["acc_parity_cbm"]
+
+
+def summarize_values(values: list[float]) -> tuple[float, float]:
+    mean = statistics.mean(values)
+    std = statistics.stdev(values) if len(values) > 1 else 0.0
+    return mean, std
+
+
 @torch.no_grad()
 def evaluate(
     *,
@@ -274,6 +344,227 @@ def evaluate(
     }
 
 
+def run_single_seed(
+    *,
+    args,
+    seed: int,
+    dataset_cls,
+    cbm_cls,
+    print_program: bool,
+) -> dict:
+    seed_args = argparse.Namespace(**vars(args))
+    seed_args.seed = seed
+
+    set_global_seed(seed)
+    device = torch.device("cpu")
+
+    print(f"\n===== Seed {seed} =====")
+    print("Loading biased MNIST-SumParity dataset...")
+    dataset = dataset_cls(seed_args)
+    dataset.get_data_loaders()
+    dataset.print_stats()
+
+    train_loader, val_loader, ood_loader = build_project_loaders(
+        dataset=dataset,
+        batch_size=seed_args.batch_size,
+        num_workers=seed_args.num_workers,
+    )
+    print(
+        "Project protocol | "
+        f"train<-original test ({len(dataset.dataset_test.targets)}) | "
+        f"selection<-validation ({len(dataset.dataset_val.targets)}) | "
+        f"final<-OOD ({len(dataset.ood_test.targets)})"
+    )
+
+    encoder, _ = dataset.get_backbone()
+    cbm = cbm_cls(
+        encoder=encoder,
+        n_images=2,
+        args=seed_args,
+        n_facts=seed_args.n_digits,
+        nr_classes=2,
+    ).to(device)
+
+    cfg = make_config(
+        mode=seed_args.config_mode,
+        T=seed_args.reasoning_steps,
+        variant=seed_args.config_variant,
+        n_digits=seed_args.n_digits,
+    )
+    bundle = build_system_from_config(cfg)
+    learner = bundle.learner.to(device)
+
+    n_atoms = len(bundle.G)
+    bot_idx = bundle.bot_idx
+    atom_to_idx = bundle.atom_to_idx
+
+    hard_idx = build_hard_idx(atom_to_idx, seed_args.n_digits).to(device)
+    soft_idx_digit = build_digit12_soft_idx(atom_to_idx, seed_args.n_digits).to(device)
+    sum_parity_idx = build_sum_parity_idx(atom_to_idx).to(device)
+    class_weights = build_parity_class_weights(dataset.dataset_test.targets, device)
+
+    opt = torch.optim.Adam(
+        list(cbm.parameters()) + list(learner.parameters()),
+        lr=seed_args.lr,
+    )
+
+    def lambda_for_epoch(ep: int) -> float:
+        if seed_args.lambda_mode == "fixed":
+            return seed_args.lam2
+        if ep == 0:
+            return seed_args.lam0
+        if ep == 1:
+            return seed_args.lam1
+        return seed_args.lam2
+
+    best_epoch = -1
+    best_val_metrics = None
+    best_cbm_state = None
+    best_learner_state = None
+
+    print("\nTraining...")
+    for ep in range(seed_args.epochs):
+        lam = lambda_for_epoch(ep)
+        print(f"Epoch {ep + 1}/{seed_args.epochs} | Lambda: {lam}")
+        cbm.train()
+        learner.train()
+
+        total_loss = 0.0
+        for imgs, targets, concepts in train_loader:
+            imgs = imgs.to(device)
+            d1_true_t = concepts[:, 0].long().to(device)
+            d2_true_t = concepts[:, 1].long().to(device)
+            y_true_t = targets.long().to(device)
+
+            cbm_out = cbm(imgs)
+            logits1 = cbm_out["CS"][:, 0, :]
+            logits2 = cbm_out["CS"][:, 1, :]
+            probs1 = cbm_out["pCS"][:, 0, :]
+            probs2 = cbm_out["pCS"][:, 1, :]
+
+            loss_concepts = (
+                F.cross_entropy(logits1, d1_true_t, ignore_index=-1)
+                + F.cross_entropy(logits2, d2_true_t, ignore_index=-1)
+            ) / 2.0
+            if torch.isnan(loss_concepts):
+                loss_concepts = torch.tensor(0.0, device=device)
+
+            aT_batch = infer_ilp_in_chunks(
+                learner=learner,
+                probs1=probs1,
+                probs2=probs2,
+                n_atoms=n_atoms,
+                bot_idx=bot_idx,
+                T=bundle.program.T,
+                soft_idx_digit=soft_idx_digit,
+                hard_idx=hard_idx,
+                ilp_chunk_size=seed_args.ilp_chunk_size,
+            )
+            scores = aT_batch[:, sum_parity_idx]
+            loss_task = compute_task_loss(scores, y_true_t, class_weights=class_weights)
+            loss = loss_task + lam * loss_concepts
+
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            total_loss += float(loss.item())
+
+        val_metrics = evaluate(
+            cbm=cbm,
+            learner=learner,
+            loader=val_loader,
+            device=device,
+            n_atoms=n_atoms,
+            bot_idx=bot_idx,
+            T=bundle.program.T,
+            soft_idx_digit=soft_idx_digit,
+            hard_idx=hard_idx,
+            sum_parity_idx=sum_parity_idx,
+            ilp_chunk_size=seed_args.ilp_chunk_size,
+            class_weights=class_weights,
+            split_name="val",
+            print_mappings=False,
+        )
+
+        if is_better_validation(val_metrics, best_val_metrics):
+            best_epoch = ep + 1
+            best_val_metrics = val_metrics
+            best_cbm_state = clone_state_dict(cbm)
+            best_learner_state = clone_state_dict(learner)
+
+        print(
+            f"Epoch {ep + 1}/{seed_args.epochs} | "
+            f"Train Loss: {total_loss / len(train_loader):.4f} | "
+            f"Val Task Loss: {val_metrics['loss_task']:.4f} | "
+            f"Val Concept Acc: {val_metrics['acc_concepts']:.3f} | "
+            f"Val Parity Acc (ILP): {val_metrics['acc_parity_ilp']:.3f} | "
+            f"Val Parity Acc (CBM): {val_metrics['acc_parity_cbm']:.3f}"
+        )
+
+    if best_cbm_state is None or best_learner_state is None or best_val_metrics is None:
+        raise RuntimeError("No validation checkpoint was selected during training")
+
+    cbm.load_state_dict(best_cbm_state)
+    learner.load_state_dict(best_learner_state)
+
+    final_val_metrics = evaluate(
+        cbm=cbm,
+        learner=learner,
+        loader=val_loader,
+        device=device,
+        n_atoms=n_atoms,
+        bot_idx=bot_idx,
+        T=bundle.program.T,
+        soft_idx_digit=soft_idx_digit,
+        hard_idx=hard_idx,
+        sum_parity_idx=sum_parity_idx,
+        ilp_chunk_size=seed_args.ilp_chunk_size,
+        class_weights=class_weights,
+        split_name="val",
+        print_mappings=seed_args.print_mappings,
+    )
+    ood_metrics = evaluate(
+        cbm=cbm,
+        learner=learner,
+        loader=ood_loader,
+        device=device,
+        n_atoms=n_atoms,
+        bot_idx=bot_idx,
+        T=bundle.program.T,
+        soft_idx_digit=soft_idx_digit,
+        hard_idx=hard_idx,
+        sum_parity_idx=sum_parity_idx,
+        ilp_chunk_size=seed_args.ilp_chunk_size,
+        class_weights=class_weights,
+        split_name="ood",
+        print_mappings=seed_args.print_mappings,
+    )
+
+    print("\nBest-checkpoint evaluation")
+    print(
+        f"  Seed {seed} | best_epoch={best_epoch} | "
+        f"val_concept_acc={final_val_metrics['acc_concepts']:.3f} | "
+        f"val_parity_ilp={final_val_metrics['acc_parity_ilp']:.3f} | "
+        f"val_parity_cbm={final_val_metrics['acc_parity_cbm']:.3f}"
+    )
+    print(
+        f"  Seed {seed} | "
+        f"ood_concept_acc={ood_metrics['acc_concepts']:.3f} | "
+        f"ood_parity_ilp={ood_metrics['acc_parity_ilp']:.3f} | "
+        f"ood_parity_cbm={ood_metrics['acc_parity_cbm']:.3f}"
+    )
+
+    if print_program:
+        print_learned_program(bundle)
+
+    return {
+        "seed": seed,
+        "best_epoch": best_epoch,
+        "val_metrics": final_val_metrics,
+        "ood_metrics": ood_metrics,
+    }
+
+
 def main():
     bootstrap = argparse.ArgumentParser(add_help=False)
     bootstrap.add_argument("--preset", type=str, default="biased_tight_v1")
@@ -313,6 +604,8 @@ def main():
     parser.add_argument("--lam1", type=float, default=0.2)
     parser.add_argument("--lam2", type=float, default=0.0)
     parser.add_argument("--ilp_chunk_size", type=int, default=16)
+    parser.add_argument("--num_seeds", type=int, default=1)
+    parser.add_argument("--print_mappings", action="store_true")
 
     parser.set_defaults(
         preset=preset.name,
@@ -355,174 +648,68 @@ def main():
         f"epochs={args.epochs} | "
         f"batch_size={args.batch_size} | ilp_chunk_size={args.ilp_chunk_size} | "
         f"lr={args.lr} | balanced_sampler={args.balanced_sampler} | num_workers={args.num_workers} | "
+        f"num_seeds={args.num_seeds} | base_seed={123 if args.seed is None else args.seed} | "
         f"lambda_mode={args.lambda_mode} | lam=({args.lam0}, {args.lam1}, {args.lam2})"
     )
+    seed_values = resolve_seed_values(args.seed, args.num_seeds)
+    print("Project protocol | train on original test split, validate on validation split, final test on OOD split")
 
-    random.seed(args.seed or 123)
-    torch.manual_seed(args.seed or 123)
-    device = torch.device("cpu")
-
-    print("Loading biased MNIST-SumParity dataset...")
-    dataset = SUMPARITYMNIST(args)
-    train_loader, val_loader, test_loader = dataset.get_data_loaders()
-    dataset.print_stats()
-
-    encoder, _ = dataset.get_backbone()
-    cbm = MnistSumParityCBM(
-        encoder=encoder,
-        n_images=2,
-        args=args,
-        n_facts=args.n_digits,
-        nr_classes=2,
-    ).to(device)
-
-    cfg = make_config(
-        mode=args.config_mode,
-        T=args.reasoning_steps,
-        variant=args.config_variant,
-        n_digits=args.n_digits,
-    )
-    bundle = build_system_from_config(cfg)
-    learner = bundle.learner.to(device)
-
-    n_atoms = len(bundle.G)
-    bot_idx = bundle.bot_idx
-    atom_to_idx = bundle.atom_to_idx
-
-    hard_idx = build_hard_idx(atom_to_idx, args.n_digits).to(device)
-    soft_idx_digit = build_digit12_soft_idx(atom_to_idx, args.n_digits).to(device)
-    sum_parity_idx = build_sum_parity_idx(atom_to_idx).to(device)
-    class_weights = build_parity_class_weights(dataset.dataset_train.targets, device)
-
-    opt = torch.optim.Adam(
-        list(cbm.parameters()) + list(learner.parameters()),
-        lr=args.lr,
-    )
-
-    def lambda_for_epoch(ep: int) -> float:
-        if args.lambda_mode == "fixed":
-            return args.lam2
-        if ep == 0:
-            return args.lam0
-        if ep == 1:
-            return args.lam1
-        return args.lam2
-
-    print("\nTraining...")
-    for ep in range(args.epochs):
-        lam = lambda_for_epoch(ep)
-        print(f"Epoch {ep + 1}/{args.epochs} | Lambda: {lam}")
-        cbm.train()
-        learner.train()
-
-        total_loss = 0.0
-        for imgs, targets, concepts in train_loader:
-            imgs = imgs.to(device)
-            d1_true_t = concepts[:, 0].long().to(device)
-            d2_true_t = concepts[:, 1].long().to(device)
-            y_true_t = targets.long().to(device)
-
-            cbm_out = cbm(imgs)
-            logits1 = cbm_out["CS"][:, 0, :]
-            logits2 = cbm_out["CS"][:, 1, :]
-            probs1 = cbm_out["pCS"][:, 0, :]
-            probs2 = cbm_out["pCS"][:, 1, :]
-
-            loss_concepts = (
-                F.cross_entropy(logits1, d1_true_t, ignore_index=-1)
-                + F.cross_entropy(logits2, d2_true_t, ignore_index=-1)
-            ) / 2.0
-            if torch.isnan(loss_concepts):
-                loss_concepts = torch.tensor(0.0, device=device)
-
-            aT_batch = infer_ilp_in_chunks(
-                learner=learner,
-                probs1=probs1,
-                probs2=probs2,
-                n_atoms=n_atoms,
-                bot_idx=bot_idx,
-                T=bundle.program.T,
-                soft_idx_digit=soft_idx_digit,
-                hard_idx=hard_idx,
-                ilp_chunk_size=args.ilp_chunk_size,
+    results = []
+    for seed in seed_values:
+        results.append(
+            run_single_seed(
+                args=args,
+                seed=seed,
+                dataset_cls=SUMPARITYMNIST,
+                cbm_cls=MnistSumParityCBM,
+                print_program=args.num_seeds == 1,
             )
-            scores = aT_batch[:, sum_parity_idx]
-            loss_task = compute_task_loss(scores, y_true_t, class_weights=class_weights)
-            loss = loss_task + lam * loss_concepts
-
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            total_loss += float(loss.item())
-
-        val_metrics = evaluate(
-            cbm=cbm,
-            learner=learner,
-            loader=val_loader,
-            device=device,
-            n_atoms=n_atoms,
-            bot_idx=bot_idx,
-            T=bundle.program.T,
-            soft_idx_digit=soft_idx_digit,
-            hard_idx=hard_idx,
-            sum_parity_idx=sum_parity_idx,
-            ilp_chunk_size=args.ilp_chunk_size,
-            class_weights=class_weights,
-            split_name="val",
-            print_mappings=True,
         )
 
+    print("\nPer-seed summary")
+    for result in results:
         print(
-            f"Epoch {ep + 1}/{args.epochs} | "
-            f"Train Loss: {total_loss / len(train_loader):.4f} | "
-            f"Val Task Loss: {val_metrics['loss_task']:.4f} | "
-            f"Val Concept Acc: {val_metrics['acc_concepts']:.3f} | "
-            f"Val Parity Acc (ILP): {val_metrics['acc_parity_ilp']:.3f} | "
-            f"Val Parity Acc (CBM): {val_metrics['acc_parity_cbm']:.3f}"
+            f"  seed={result['seed']} | best_epoch={result['best_epoch']} | "
+            f"val_parity_ilp={result['val_metrics']['acc_parity_ilp']:.3f} | "
+            f"ood_parity_ilp={result['ood_metrics']['acc_parity_ilp']:.3f}"
         )
 
-    test_metrics = evaluate(
-        cbm=cbm,
-        learner=learner,
-        loader=test_loader,
-        device=device,
-        n_atoms=n_atoms,
-        bot_idx=bot_idx,
-        T=bundle.program.T,
-        soft_idx_digit=soft_idx_digit,
-        hard_idx=hard_idx,
-        sum_parity_idx=sum_parity_idx,
-        ilp_chunk_size=args.ilp_chunk_size,
-        class_weights=class_weights,
-        print_mappings=True,
-    )
-    ood_metrics = evaluate(
-        cbm=cbm,
-        learner=learner,
-        loader=dataset.ood_loader,
-        device=device,
-        n_atoms=n_atoms,
-        bot_idx=bot_idx,
-        T=bundle.program.T,
-        soft_idx_digit=soft_idx_digit,
-        hard_idx=hard_idx,
-        sum_parity_idx=sum_parity_idx,
-        ilp_chunk_size=args.ilp_chunk_size,
-        class_weights=class_weights,
-        print_mappings=True,
-    )
+    if len(results) > 1:
+        best_epoch_mean, best_epoch_std = summarize_values(
+            [float(result["best_epoch"]) for result in results]
+        )
+        val_concepts_mean, val_concepts_std = summarize_values(
+            [result["val_metrics"]["acc_concepts"] for result in results]
+        )
+        val_ilp_mean, val_ilp_std = summarize_values(
+            [result["val_metrics"]["acc_parity_ilp"] for result in results]
+        )
+        val_cbm_mean, val_cbm_std = summarize_values(
+            [result["val_metrics"]["acc_parity_cbm"] for result in results]
+        )
+        ood_concepts_mean, ood_concepts_std = summarize_values(
+            [result["ood_metrics"]["acc_concepts"] for result in results]
+        )
+        ood_ilp_mean, ood_ilp_std = summarize_values(
+            [result["ood_metrics"]["acc_parity_ilp"] for result in results]
+        )
+        ood_cbm_mean, ood_cbm_std = summarize_values(
+            [result["ood_metrics"]["acc_parity_cbm"] for result in results]
+        )
 
-    print("\nFinal evaluation")
-    print(
-        f"  Test ID   | concept_acc={test_metrics['acc_concepts']:.3f} | "
-        f"parity_ilp={test_metrics['acc_parity_ilp']:.3f} | parity_cbm={test_metrics['acc_parity_cbm']:.3f}"
-    )
-    print(
-        f"  Test OOD  | concept_acc={ood_metrics['acc_concepts']:.3f} | "
-        f"parity_ilp={ood_metrics['acc_parity_ilp']:.3f} | parity_cbm={ood_metrics['acc_parity_cbm']:.3f}"
-    )
-
-    print_learned_program(bundle)
+        print("\nAggregate over seeds")
+        print(f"  Seeds      | {seed_values}")
+        print(f"  Best epoch | mean={best_epoch_mean:.2f} | std={best_epoch_std:.2f}")
+        print(
+            f"  Val        | concept_acc={val_concepts_mean:.3f}±{val_concepts_std:.3f} | "
+            f"parity_ilp={val_ilp_mean:.3f}±{val_ilp_std:.3f} | "
+            f"parity_cbm={val_cbm_mean:.3f}±{val_cbm_std:.3f}"
+        )
+        print(
+            f"  Test OOD   | concept_acc={ood_concepts_mean:.3f}±{ood_concepts_std:.3f} | "
+            f"parity_ilp={ood_ilp_mean:.3f}±{ood_ilp_std:.3f} | "
+            f"parity_cbm={ood_cbm_mean:.3f}±{ood_cbm_std:.3f}"
+        )
 
 
 if __name__ == "__main__":

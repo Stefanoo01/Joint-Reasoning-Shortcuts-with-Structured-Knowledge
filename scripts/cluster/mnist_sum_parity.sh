@@ -11,4 +11,4 @@
 #SBATCH --cpus-per-task=8
 
 # Run the script
-python -m experiments.run_mnist_sum_parity_supervised --preset biased_tight_v2
+python -m experiments.run_mnist_sum_parity_supervised --preset biased_tight_v2 "$@"
