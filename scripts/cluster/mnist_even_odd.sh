@@ -11,4 +11,4 @@
 #SBATCH --cpus-per-task=8
 
 # Run the script
-python -m experiments.run_mnist_even_odd_supervised --preset add_sum_relaxed_v1 --lam2 0.4
+python -m experiments.run_mnist_even_odd_supervised --preset add_sum_relaxed_v1 --lam2 0.4 "$@"

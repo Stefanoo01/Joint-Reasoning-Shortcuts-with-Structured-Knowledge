@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import random
 import sys
 
 import torch
@@ -19,6 +18,12 @@ if RSBENCH_DIR not in sys.path:
 
 from configs.mnist_even_odd_addition import make_config
 from configs.mnist_even_odd_presets import format_preset, get_preset, list_presets
+from experiments.addition_evaluation import build_deterministic_loader
+from experiments.addition_evaluation import clone_state_dict
+from experiments.addition_evaluation import is_better_sum_validation
+from experiments.addition_evaluation import print_multi_seed_summary
+from experiments.addition_evaluation import resolve_seed_values
+from experiments.addition_evaluation import set_global_seed
 from ilp.learning.system_builder import build_system_from_config
 from ilp.learning.trainer import extract_topk_program
 from ilp.logic.atoms import Atom
@@ -200,6 +205,203 @@ def evaluate(
     }
 
 
+def run_single_seed(
+    *,
+    args,
+    seed: int,
+    dataset_cls,
+    cbm_cls,
+    print_program: bool,
+) -> dict:
+    seed_args = argparse.Namespace(**vars(args))
+    seed_args.seed = seed
+    set_global_seed(seed)
+    device = torch.device("cpu")
+
+    print(f"\n===== Seed {seed} =====")
+    print("Loading RSBench SHORTMNIST (MNIST-Even-Odd)...")
+    dataset = dataset_cls(seed_args)
+    train_loader, _, _ = dataset.get_data_loaders()
+    dataset.print_stats()
+
+    val_loader = build_deterministic_loader(
+        dataset.dataset_val,
+        batch_size=seed_args.batch_size,
+    )
+    test_id_loader = build_deterministic_loader(
+        dataset.dataset_test,
+        batch_size=seed_args.batch_size,
+    )
+    ood_same_targets_loader = build_deterministic_loader(
+        dataset.ood_test_2,
+        batch_size=seed_args.batch_size,
+    )
+    ood_full_loader = build_deterministic_loader(
+        dataset.ood_test,
+        batch_size=seed_args.batch_size,
+    )
+    print(
+        "Evaluation protocol | "
+        f"selection<-validation ({len(dataset.dataset_val)}) | "
+        f"test_id ({len(dataset.dataset_test)}) | "
+        f"test_ood_same_sums ({len(dataset.ood_test_2)}) | "
+        f"test_ood_full ({len(dataset.ood_test)})"
+    )
+
+    encoder, _ = dataset.get_backbone()
+    cbm = cbm_cls(
+        encoder=encoder,
+        n_images=2,
+        args=seed_args,
+        n_facts=10,
+        nr_classes=19,
+    ).to(device)
+
+    cfg = make_config(
+        mode=seed_args.config_mode,
+        T=seed_args.reasoning_steps,
+        variant=seed_args.config_variant,
+    )
+    bundle = build_system_from_config(cfg)
+    learner = bundle.learner.to(device)
+
+    n_atoms = len(bundle.G)
+    bot_idx = bundle.bot_idx
+    atom_to_idx = bundle.atom_to_idx
+    hard_idx_add = build_add_truth_table_hard_idx(atom_to_idx).to(device)
+    soft_idx_digit = build_digit12_soft_idx(atom_to_idx).to(device)
+    sum_is_idx = build_sum_is_idx(atom_to_idx).to(device)
+
+    opt = torch.optim.Adam(list(cbm.parameters()) + list(learner.parameters()), lr=1e-3)
+
+    def lambda_for_epoch(ep: int) -> float:
+        if seed_args.lambda_mode == "fixed":
+            return seed_args.lam2
+        if ep == 0:
+            return seed_args.lam0
+        if ep == 1:
+            return seed_args.lam1
+        return seed_args.lam2
+
+    best_epoch = 0
+    best_val_metrics = None
+    best_cbm_state = None
+    best_learner_state = None
+
+    evaluation_kwargs = {
+        "cbm": cbm,
+        "learner": learner,
+        "device": device,
+        "n_atoms": n_atoms,
+        "bot_idx": bot_idx,
+        "T": bundle.program.T,
+        "soft_idx_digit": soft_idx_digit,
+        "hard_idx_add": hard_idx_add,
+        "sum_is_idx": sum_is_idx,
+        "ilp_chunk_size": seed_args.ilp_chunk_size,
+    }
+
+    print("\nTraining...")
+    for ep in range(seed_args.epochs):
+        lam = lambda_for_epoch(ep)
+        print(f"Epoch {ep + 1}/{seed_args.epochs} | Lambda: {lam}")
+        cbm.train()
+        learner.train()
+
+        total_loss = 0.0
+        for imgs, targets, concepts in train_loader:
+            imgs = imgs.to(device)
+            d1_true_t = concepts[:, 0].long().to(device)
+            d2_true_t = concepts[:, 1].long().to(device)
+            s_true_t = targets.long().to(device)
+
+            cbm_out = cbm(imgs)
+            logits1 = cbm_out["CS"][:, 0, :]
+            logits2 = cbm_out["CS"][:, 1, :]
+            probs1 = cbm_out["pCS"][:, 0, :]
+            probs2 = cbm_out["pCS"][:, 1, :]
+
+            loss_concepts = (
+                F.cross_entropy(logits1, d1_true_t, ignore_index=-1)
+                + F.cross_entropy(logits2, d2_true_t, ignore_index=-1)
+            ) / 2.0
+            if torch.isnan(loss_concepts):
+                loss_concepts = torch.tensor(0.0, device=device)
+
+            aT_batch = infer_ilp_in_chunks(
+                learner=learner,
+                probs1=probs1,
+                probs2=probs2,
+                n_atoms=n_atoms,
+                bot_idx=bot_idx,
+                T=bundle.program.T,
+                soft_idx_digit=soft_idx_digit,
+                hard_idx_add=hard_idx_add,
+                ilp_chunk_size=seed_args.ilp_chunk_size,
+            )
+            scores = aT_batch[:, sum_is_idx]
+            loss_task = compute_sum_task_loss(scores, s_true_t)
+            loss = loss_task + lam * loss_concepts
+
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            total_loss += float(loss.item())
+
+        val_metrics = evaluate(loader=val_loader, **evaluation_kwargs)
+        if is_better_sum_validation(val_metrics, best_val_metrics):
+            best_epoch = ep + 1
+            best_val_metrics = dict(val_metrics)
+            best_cbm_state = clone_state_dict(cbm)
+            best_learner_state = clone_state_dict(learner)
+
+        print(
+            f"Epoch {ep + 1}/{seed_args.epochs} | "
+            f"Train Loss: {total_loss / len(train_loader):.4f} | "
+            f"Val Task Loss: {val_metrics['loss_task']:.4f} | "
+            f"Val Concept Acc: {val_metrics['acc_concepts']:.3f} | "
+            f"Val Sum Acc (ILP): {val_metrics['acc_sum_ilp']:.3f} | "
+            f"Val Sum Acc (CBM): {val_metrics['acc_sum_cbm']:.3f}"
+        )
+
+    if best_cbm_state is None or best_learner_state is None:
+        raise RuntimeError("No validation checkpoint was selected during training")
+
+    cbm.load_state_dict(best_cbm_state)
+    learner.load_state_dict(best_learner_state)
+    split_loaders = {
+        "val_metrics": val_loader,
+        "test_id_metrics": test_id_loader,
+        "ood_same_targets_metrics": ood_same_targets_loader,
+        "ood_full_metrics": ood_full_loader,
+    }
+    metrics_by_split = {
+        key: evaluate(loader=loader, **evaluation_kwargs)
+        for key, loader in split_loaders.items()
+    }
+
+    print(f"\nBest-checkpoint evaluation | seed={seed} | epoch={best_epoch}")
+    for split_name, key in (
+        ("Validation", "val_metrics"),
+        ("Test ID", "test_id_metrics"),
+        ("Test OOD same sums", "ood_same_targets_metrics"),
+        ("Test OOD full", "ood_full_metrics"),
+    ):
+        metrics = metrics_by_split[key]
+        print(
+            f"  {split_name:<19} | "
+            f"concept_acc={metrics['acc_concepts']:.3f} | "
+            f"sum_ilp={metrics['acc_sum_ilp']:.3f} | "
+            f"sum_cbm={metrics['acc_sum_cbm']:.3f} | "
+            f"task_loss={metrics['loss_task']:.4f}"
+        )
+
+    if print_program:
+        print_learned_program(bundle)
+
+    return {"seed": seed, "best_epoch": best_epoch, **metrics_by_split}
+
+
 def main():
     bootstrap = argparse.ArgumentParser(add_help=False)
     bootstrap.add_argument("--preset", type=str, default="add_medium_v1")
@@ -236,6 +438,7 @@ def main():
     parser.add_argument("--lam1", type=float, default=0.2)
     parser.add_argument("--lam2", type=float, default=0.0)
     parser.add_argument("--ilp_chunk_size", type=int, default=16)
+    parser.add_argument("--num_seeds", type=int, default=1)
 
     parser.set_defaults(
         preset=preset.name,
@@ -275,125 +478,21 @@ def main():
         f"variant={args.config_variant} | mode={args.config_mode} | T={args.reasoning_steps} | "
         f"epochs={args.epochs} | "
         f"batch_size={args.batch_size} | ilp_chunk_size={args.ilp_chunk_size} | "
+        f"num_seeds={args.num_seeds} | base_seed={123 if args.seed is None else args.seed} | "
         f"lambda_mode={args.lambda_mode} | lam=({args.lam0}, {args.lam1}, {args.lam2})"
     )
-
-    random.seed(args.seed or 123)
-    torch.manual_seed(args.seed or 123)
-    device = torch.device("cpu")
-
-    print("Loading RSBench SHORTMNIST (MNIST-Even-Odd)...")
-    dataset = SHORTMNIST(args)
-    train_loader, val_loader, test_loader = dataset.get_data_loaders()
-    dataset.print_stats()
-
-    encoder, _ = dataset.get_backbone()
-    cbm = MnistCBM(
-        encoder=encoder,
-        n_images=2,
-        args=args,
-        n_facts=10,
-        nr_classes=19,
-    ).to(device)
-
-    cfg = make_config(
-        mode=args.config_mode,
-        T=args.reasoning_steps,
-        variant=args.config_variant,
-    )
-    bundle = build_system_from_config(cfg)
-    learner = bundle.learner.to(device)
-
-    n_atoms = len(bundle.G)
-    bot_idx = bundle.bot_idx
-    atom_to_idx = bundle.atom_to_idx
-
-    hard_idx_add = build_add_truth_table_hard_idx(atom_to_idx).to(device)
-    soft_idx_digit = build_digit12_soft_idx(atom_to_idx).to(device)
-    sum_is_idx = build_sum_is_idx(atom_to_idx).to(device)
-
-    opt = torch.optim.Adam(list(cbm.parameters()) + list(learner.parameters()), lr=1e-3)
-
-    def lambda_for_epoch(ep: int) -> float:
-        if args.lambda_mode == "fixed":
-            return args.lam2
-        if ep >= 0:
-            return args.lam0
-        if ep == 1:
-            return args.lam1
-        return args.lam2
-
-    print("\nTraining...")
-    for ep in range(args.epochs):
-        lam = lambda_for_epoch(ep)
-        print(f"Epoch {ep + 1}/{args.epochs} | Lambda: {lam}")
-        cbm.train()
-        learner.train()
-
-        total_loss = 0.0
-        for imgs, targets, concepts in train_loader:
-            imgs = imgs.to(device)
-            d1_true_t = concepts[:, 0].long().to(device)
-            d2_true_t = concepts[:, 1].long().to(device)
-            s_true_t = targets.long().to(device)
-
-            cbm_out = cbm(imgs)
-            logits1 = cbm_out["CS"][:, 0, :]
-            logits2 = cbm_out["CS"][:, 1, :]
-            probs1 = cbm_out["pCS"][:, 0, :]
-            probs2 = cbm_out["pCS"][:, 1, :]
-
-            loss_concepts = (
-                F.cross_entropy(logits1, d1_true_t, ignore_index=-1)
-                + F.cross_entropy(logits2, d2_true_t, ignore_index=-1)
-            ) / 2.0
-            if torch.isnan(loss_concepts):
-                loss_concepts = torch.tensor(0.0, device=device)
-
-            aT_batch = infer_ilp_in_chunks(
-                learner=learner,
-                probs1=probs1,
-                probs2=probs2,
-                n_atoms=n_atoms,
-                bot_idx=bot_idx,
-                T=bundle.program.T,
-                soft_idx_digit=soft_idx_digit,
-                hard_idx_add=hard_idx_add,
-                ilp_chunk_size=args.ilp_chunk_size,
-            )
-            scores = aT_batch[:, sum_is_idx]
-            loss_task = compute_sum_task_loss(scores, s_true_t)
-            loss = loss_task + lam * loss_concepts
-
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            total_loss += float(loss.item())
-
-        val_metrics = evaluate(
-            cbm=cbm,
-            learner=learner,
-            loader=val_loader,
-            device=device,
-            n_atoms=n_atoms,
-            bot_idx=bot_idx,
-            T=bundle.program.T,
-            soft_idx_digit=soft_idx_digit,
-            hard_idx_add=hard_idx_add,
-            sum_is_idx=sum_is_idx,
-            ilp_chunk_size=args.ilp_chunk_size,
+    seed_values = resolve_seed_values(args.seed, args.num_seeds)
+    results = [
+        run_single_seed(
+            args=args,
+            seed=seed,
+            dataset_cls=SHORTMNIST,
+            cbm_cls=MnistCBM,
+            print_program=args.num_seeds == 1,
         )
-
-        print(
-            f"Epoch {ep + 1}/{args.epochs} | "
-            f"Train Loss: {total_loss / len(train_loader):.4f} | "
-            f"Val Task Loss: {val_metrics['loss_task']:.4f} | "
-            f"Val Concept Acc: {val_metrics['acc_concepts']:.3f} | "
-            f"Val Sum Acc (ILP): {val_metrics['acc_sum_ilp']:.3f} | "
-            f"Val Sum Acc (CBM): {val_metrics['acc_sum_cbm']:.3f}"
-        )
-
-    print_learned_program(bundle)
+        for seed in seed_values
+    ]
+    print_multi_seed_summary(results, seed_values)
 
 
 if __name__ == "__main__":
